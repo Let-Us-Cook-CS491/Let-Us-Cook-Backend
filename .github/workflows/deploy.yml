@@ -25,14 +25,18 @@ jobs:
             ecosystem.config.js
           target: "/home/ubuntu/LetUsCook-Backend"
 
-      - name: Restart PM2 on EC2
+      - name: Deploy and restart PM2
         uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_KEY }}
           script: |
-            cd /home/ubuntu/LetUsCook-Backend
+            set -e
+            cd /home/ubuntu/LetUsCook-Backendy
             npm ci --omit=dev
+
             pm2 reload LetUsCook-Backend || pm2 start ecosystem.config.js
+
             pm2 save
+
