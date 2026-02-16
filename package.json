@@ -1,7 +1,7 @@
 {
-  "name": "committoit",
+  "name": "letuscook",
   "version": "1.0.0",
-  "description": "Express app with health checkpoint and controller/route structure",
+  "description": "Meal Planning and Recipe Sharing Platform",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
