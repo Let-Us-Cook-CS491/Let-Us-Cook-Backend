@@ -11,6 +11,9 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
+
+      - name: List repo files
+        run: ls -R
         
       - name: Copy files to EC2
         uses: appleboy/scp-action@v0.1.4
@@ -19,11 +22,11 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_KEY }}
           source: |
-            Let-Us-Cook-Backend/src
-            Let-Us-Cook-Backend/package.json
-            Let-Us-Cook-Backend/package-lock.json
-            Let-Us-Cook-Backend/ecosystem.config.js
-          target: "/home/ubuntu/LetUsCook-Backend"
+            src
+            package.json
+            package-lock.json
+            ecosystem.config.js
+          target: /home/ubuntu/LetUsCook-Backend
 
       - name: Deploy and restart PM2
         uses: appleboy/ssh-action@v0.1.7
