@@ -128,6 +128,21 @@ exports.signup = async (req, res) => {
             email: email
         });
 
+        // Update User's Stored refresh token
+        const updateUserRefreshTokenQuery = `UPDATE auth_credentials SET refresh_token = ? WHERE user_id = ?`;
+        const [updateUserRefreshTokenResult] = await connection.execute(updateUserRefreshTokenQuery, [tokens.refreshToken, userId]);
+
+        if (updateUserRefreshTokenResult.affectedRows === 0) {
+            await connection.rollback();
+            return res.status(500).json({
+                status: "ERROR",
+                message: "Failed to update user refresh token",
+            });
+        }
+
+        // Commit transaction
+        await connection.commit();
+
         res.status(201).json({
             status: "OK",
             message: "User registered successfully",
@@ -235,6 +250,20 @@ exports.login = async (req, res) => {
             email: user.email
         });
 
+        // Update User's Stored refresh token
+        const updateUserRefreshTokenQuery = `UPDATE auth_credentials SET refresh_token = ? WHERE user_id = ?`;
+        const [updateUserRefreshTokenResult] = await connection.execute(updateUserRefreshTokenQuery, [tokens.refreshToken, user.user_id]);
+
+        if (updateUserRefreshTokenResult.affectedRows === 0) {
+            await connection.rollback();
+            return res.status(500).json({
+                status: "ERROR",
+                message: "Failed to update user refresh token",
+            });
+        }
+
+        await connection.commit();
+
         res.status(200).json({
             status: "OK",
             message: "Login successful",
@@ -256,8 +285,69 @@ exports.login = async (req, res) => {
     }
 }
 
+exports.logout = async (req, res) => {
+    const { user_id } = req.body;
+
+    if (!user_id) {
+        return res.status(400).json({
+            status: "ERROR",
+            message: "User ID is required",
+        });
+    }
+
+    let connection; 
+
+    try {
+        connection = await db.getConnection();
+
+        await connection.beginTransaction();
+
+        // Find user by email
+        const findUserQuery = `SELECT user_id FROM users WHERE user_id = ?`;
+        const [userResult] = await connection.execute(findUserQuery, [user_id]);
+
+        if (userResult.length === 0) {
+            await connection.rollback();
+            return res.status(401).json({
+                status: "ERROR",
+                message: "User does not exist",
+            });
+        }
+
+        // Update User's Stored refresh token
+        const updateUserRefreshTokenQuery = `UPDATE auth_credentials SET refresh_token = NULL WHERE user_id = ?`;
+        const [updateUserRefreshTokenResult] = await connection.execute(updateUserRefreshTokenQuery, [user_id]);
+
+        if (updateUserRefreshTokenResult.affectedRows === 0) {
+            await connection.rollback();
+            return res.status(500).json({
+                status: "ERROR",
+                message: "Failed to update user refresh token",
+            });
+        }
+
+
+        // Commit transaction
+        await connection.commit();
+
+        res.status(200).json({
+            status: "OK",
+            message: "Logout successful",
+        });
+
+    } catch (error) {
+        if (connection) await connection.rollback();
+        res.status(500).json({
+            status: "ERROR",
+            message: "Logout failed",
+            error: error.message,
+        });
+    } finally {
+        if (connection) await connection.release();
+    }
+}
 exports.refreshToken = async (req, res) => {
-    const { refreshToken } = req.body;
+    const { refreshToken, user_id } = req.body;
 
     if (!refreshToken) {
         return res.status(400).json({
@@ -266,9 +356,41 @@ exports.refreshToken = async (req, res) => {
         });
     }
 
+    let connection; 
+
     try {
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+
         // Verify the refresh token
         const decoded = verifyRefreshToken(refreshToken);
+
+        // Validate user ID
+        if (decoded.user_id !== user_id) {
+            return res.status(401).json({
+                status: "ERROR",
+                message: "Unauthorized: Invalid User ID for this refresh token",
+            });
+        }
+
+        const validRefreshTokenQuery = `SELECT refresh_token FROM auth_credentials WHERE user_id = ?`;
+        const [validRefreshTokenResult] = await connection.execute(validRefreshTokenQuery, [user_id]);
+
+        if (validRefreshTokenResult.length === 0) {
+            await connection.rollback();
+            return res.status(401).json({
+                status: "ERROR",
+                message: "No refresh token found for this user",
+            });
+        }
+
+        if (validRefreshTokenResult[0].refresh_token !== refreshToken) {
+            await connection.rollback();
+            return res.status(401).json({
+                status: "ERROR",
+                message: "Invalid or Expired refresh token",
+            });
+        }
 
         // Generate a new access token
         const newAccessToken = generateAccessToken({
