@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "build": "vite build"
+    "build": "node scripts/build.js"
   },
   "keywords": [],
   "author": "",
