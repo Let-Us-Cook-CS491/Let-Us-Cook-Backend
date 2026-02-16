@@ -21,7 +21,7 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_KEY }}
-          source: "src,package.json,package-lock.json,ecosystem.config.js"
+          source: "./"
           target: /home/ubuntu/LetUsCook-Backend
 
       - name: Deploy and restart PM2
