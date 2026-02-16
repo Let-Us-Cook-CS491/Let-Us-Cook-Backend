@@ -19,10 +19,10 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_KEY }}
           source: |
-            src
-            package.json
-            package-lock.json
-            ecosystem.config.js
+            Let-Us-Cook-Backend/src
+            Let-Us-Cook-Backend/package.json
+            Let-Us-Cook-Backend/package-lock.json
+            Let-Us-Cook-Backend/ecosystem.config.js
           target: "/home/ubuntu/LetUsCook-Backend"
 
       - name: Deploy and restart PM2
@@ -33,7 +33,7 @@ jobs:
           key: ${{ secrets.EC2_KEY }}
           script: |
             set -e
-            cd /home/ubuntu/LetUsCook-Backendy
+            cd /home/ubuntu/LetUsCook-Backend
             npm ci --omit=dev
 
             pm2 reload LetUsCook-Backend || pm2 start ecosystem.config.js
