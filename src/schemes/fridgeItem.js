@@ -8,17 +8,18 @@ const fridgeItemSchema = new mongoose.Schema(
     expiration_date: { type: Date, required: true },
     quantity: { type: Number, required: true, min: 0 },
     unit: { type: String, required: true, trim: true },
+    location: { type: String, required: false, trim: true },
   },
   {
-    collection: 'Fridges',
+    collection: 'Inventory',
     timestamps: true,
   }
 );
 
 // One item per user per (name, category, unit).
 fridgeItemSchema.index(
-  { user_id: 1, name: 1, category: 1, unit: 1 },
-  { unique: true }
+  { user_id: 1, name: 1, category: 1, unit: 1, location: 1 },
+  { unique: true, sparse: true }
 );
 
 const FridgeItem =
