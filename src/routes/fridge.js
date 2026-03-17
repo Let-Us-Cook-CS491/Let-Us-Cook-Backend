@@ -3,7 +3,7 @@ const router = express.Router();
 const { verifyToken } = require('../middleware/auth.middleware');
 const { apiLimiter } = require('../middleware/rateLimiters');
 const { upload } = require('../middleware/upload');
-const { addItemToFridge, uploadReceiptToFridge, confirmReceiptItems, updateItemInFridge, getUserFridge } = require('../controllers/fridgeController');
+const { addItemToFridge, uploadReceiptToFridge, confirmReceiptItems, updateItemInFridge, getUserFridge,removeItemFromFridge } = require('../controllers/fridgeController');
 
 
 router.post('/receipt', verifyToken, apiLimiter, upload.single('receipt'), uploadReceiptToFridge);
