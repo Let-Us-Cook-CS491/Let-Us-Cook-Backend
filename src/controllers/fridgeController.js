@@ -105,3 +105,46 @@ exports.addItemToFridge = async (req, res) => {
     }
 };
 
+exports.removeItemFromFridge = async (req, res) => {
+    try {
+        await connectMongo();
+
+        const rawUserId = req.user?.user_id;
+        const user_id = Number(rawUserId);
+        if (!Number.isInteger(user_id)) {
+            return res.status(401).json({
+                status: "ERROR",
+                message: "Unauthorized User",
+            });
+        }
+        
+        const { item_id } = req.body;
+
+        if (!item_id) {
+            return res.status(400).json({
+                status: "ERROR",
+                message: "item_id is required",
+            });
+        }
+
+        const deletedFridgeItem = await FridgeItem.deleteOne({ user_id, _id: item_id });
+
+        if (deletedFridgeItem.deletedCount === 0) {
+            return res.status(404).json({
+                status: "ERROR",
+                message: "Item not found",
+            });
+        }
+
+        return res.status(200).json({
+            status: "OK",
+            message: "Item removed from fridge",
+        });
+    } catch (err) {
+        console.error('deletedFridgeItem error:', err);
+        return res.status(500).json({
+            status: "ERROR",
+            message: "Failed to delete item from fridge",
+        });
+    }
+};        
