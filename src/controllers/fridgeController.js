@@ -315,12 +315,21 @@ exports.getUserFridge = async (req, res) => {
         const category = req.query?.category;
         const rawLimit = req.query?.limit;
         const rawSkip = req.query?.skip;
+        const rawExpiringInDays = req.query?.expiringInDays;
+
         const limit = Math.min(Math.max(Number(rawLimit) || 50, 1), 200);
         const skip = Math.max(Number(rawSkip) || 0, 0);
 
         const filter = { user_id };
         if (category !== undefined && category !== null && String(category).trim() !== '') {
             filter.category = String(category).trim();
+        }
+
+        const expiringInDays = Number(rawExpiringInDays);
+        if (Number.isFinite(expiringInDays) && expiringInDays > 0) {
+            const now = new Date();
+            const upper = new Date(now.getTime() + expiringInDays * 24 * 60 * 60 * 1000);
+            filter.expiration_date = { $gte: now, $lte: upper };
         }
 
         const sort = filter.category
