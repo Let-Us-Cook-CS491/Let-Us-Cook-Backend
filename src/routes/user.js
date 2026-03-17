@@ -5,7 +5,7 @@ const { apiLimiter, strictLimiter } = require('../middleware/rateLimiters');
 const { setUserPreference } = require('../controllers/userController');
 
 
-router.post('/set-preferences', verifyToken, apiLimiter, setUserPreference);
+router.post('/set-preferences', apiLimiter, verifyToken, setUserPreference);
 
 
 module.exports = router;
