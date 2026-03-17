@@ -272,4 +272,46 @@ exports.updateItemInFridge = async (req, res) => {
             message: "Failed to update item from fridge",
         });
     }
+};   
+
+exports.getUserFridge = async (req, res) => {
+    try {
+        await connectMongo();
+
+        const rawUserId = req.user?.user_id;
+        const user_id = Number(rawUserId);
+        if (!Number.isInteger(user_id)) {
+            return res.status(401).json({
+                status: "ERROR",
+                message: "Unauthorized User",
+            });
+        }
+        
+        const category = req.query?.category;
+
+        const filter = { user_id };
+        if (category !== undefined && category !== null && String(category).trim() !== '') {
+            filter.category = String(category).trim();
+        }
+
+        const sort = filter.category
+            ? { expiration_date: 1, name: 1 }
+            : { category: 1, expiration_date: 1, name: 1 };
+
+        const items = await FridgeItem.find(filter).sort(sort).lean();
+
+        return res.status(200).json({
+            status: "OK",
+            message: "Fridge items fetched",
+            data: items,
+        });
+    } catch (err) {
+        console.error('getUserFridge error:', err);
+        return res.status(500).json({
+            status: "ERROR",
+            message: "Failed to fetch fridge items",
+        });
+    }
 };       
+
+
