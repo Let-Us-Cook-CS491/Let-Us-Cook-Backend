@@ -16,7 +16,7 @@ exports.addItemToFridge = async (req, res) => {
             });
         }
         
-        const { name, category, expiration_date, quantity, unit } = req.body;
+        const { name, category, expiration_date, quantity, unit, location } = req.body;
 
         if (!name || !category || !expiration_date || quantity === undefined || quantity === null || !unit) {
             return res.status(400).json({
@@ -69,19 +69,27 @@ exports.addItemToFridge = async (req, res) => {
             });
         }
 
+        const filter = { user_id, name: normalizedName, category, unit };
+
+        const update = {
+            $set: { expiration_date: parsedExpiration },
+            $inc: { quantity: Number(quantity) },
+          };
+          
+          // Only add location if it's provided
+          if (location) {
+            update.$set.location = location;
+          }
+          
         const upsertedFridgeItem = await FridgeItem.findOneAndUpdate(
-            { user_id, name: normalizedName, category, unit },
+            filter,
+            update,
             {
-                $set: { expiration_date: parsedExpiration },
-                $inc: { quantity: Number(quantity) },
-                $setOnInsert: { user_id, name: normalizedName, category, unit },
-            },
-            {
-                upsert: true,
-                returnDocument: 'after',
-                setDefaultsOnInsert: true,
+              upsert: true,                 // create if not found
+              returnDocument: 'after',      // return the updated document
+              setDefaultsOnInsert: true,
             }
-        );
+          );
 
         return res.status(200).json({
             status: "OK",
