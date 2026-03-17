@@ -3,6 +3,7 @@ const cors = require('cors');
 
 const healthRoutes = require('./routes/health');
 const authRoutes = require('./routes/auth');
+const fridgeRoutes = require('./routes/fridge');
 
 const app = express();
 
@@ -11,5 +12,6 @@ app.use(express.json());
 
 app.use('/api', healthRoutes);
 app.use('/api/auth', authRoutes);
+app.use('/api/fridge', fridgeRoutes);
 
 module.exports = app;
