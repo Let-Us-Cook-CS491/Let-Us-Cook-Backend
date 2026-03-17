@@ -89,7 +89,7 @@ exports.addItemToFridge = async (req, res) => {
               returnDocument: 'after',      // return the updated document
               setDefaultsOnInsert: true,
             }
-          );
+          ).lean();
 
         return res.status(200).json({
             status: "OK",
@@ -118,7 +118,7 @@ exports.removeItemFromFridge = async (req, res) => {
             });
         }
         
-        const { item_id } = req.body;
+        const { item_id, count } = req.body;
 
         if (!item_id) {
             return res.status(400).json({
@@ -127,24 +127,47 @@ exports.removeItemFromFridge = async (req, res) => {
             });
         }
 
-        const deletedFridgeItem = await FridgeItem.deleteOne({ user_id, _id: item_id });
+        const removeCount = Number(count ?? 1);
+        if (!Number.isFinite(removeCount) || removeCount <= 0) {
+            return res.status(400).json({
+                status: "ERROR",
+                message: "count must be a number greater than 0",
+            });
+        }
 
-        if (deletedFridgeItem.deletedCount === 0) {
+        const existing = await FridgeItem.findOne({ user_id, _id: item_id }).lean();
+        if (!existing) {
             return res.status(404).json({
                 status: "ERROR",
                 message: "Item not found",
             });
         }
 
+        const newQuantity = Number(existing.quantity) - removeCount;
+        if (newQuantity <= 0) {
+            await FridgeItem.deleteOne({ user_id, _id: item_id });
+            return res.status(200).json({
+                status: "OK",
+                message: "Item removed from fridge",
+            });
+        }
+
+        const updated = await FridgeItem.findOneAndUpdate(
+            { user_id, _id: item_id },
+            { $set: { quantity: newQuantity } },
+            { returnDocument: 'after' }
+        ).lean();
+
         return res.status(200).json({
             status: "OK",
-            message: "Item removed from fridge",
+            message: "Item quantity updated",
+            data: updated,
         });
     } catch (err) {
-        console.error('deletedFridgeItem error:', err);
+        console.error('removeItemFromFridge error:', err);
         return res.status(500).json({
             status: "ERROR",
-            message: "Failed to delete item from fridge",
+            message: "Failed to remove item from fridge",
         });
     }
 };        
@@ -244,7 +267,7 @@ exports.updateItemInFridge = async (req, res) => {
             { user_id, _id: item_id },
             { $set: updateFields },
             { returnDocument: 'after' }
-        );
+        ).lean();
 
         if (!updatedFridgeItem) {
             return res.status(404).json({
@@ -288,6 +311,10 @@ exports.getUserFridge = async (req, res) => {
         }
         
         const category = req.query?.category;
+        const rawLimit = req.query?.limit;
+        const rawSkip = req.query?.skip;
+        const limit = Math.min(Math.max(Number(rawLimit) || 50, 1), 200);
+        const skip = Math.max(Number(rawSkip) || 0, 0);
 
         const filter = { user_id };
         if (category !== undefined && category !== null && String(category).trim() !== '') {
@@ -298,7 +325,12 @@ exports.getUserFridge = async (req, res) => {
             ? { expiration_date: 1, name: 1 }
             : { category: 1, expiration_date: 1, name: 1 };
 
-        const items = await FridgeItem.find(filter).sort(sort).lean();
+        const items = await FridgeItem
+            .find(filter, { __v: 0 })
+            .sort(sort)
+            .skip(skip)
+            .limit(limit)
+            .lean();
 
         return res.status(200).json({
             status: "OK",
