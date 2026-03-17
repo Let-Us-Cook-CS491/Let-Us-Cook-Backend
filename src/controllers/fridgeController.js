@@ -25,6 +25,14 @@ exports.addItemToFridge = async (req, res) => {
             });
         }
 
+        const normalizedName = String(name).trim().toLowerCase();
+        if (!normalizedName) {
+            return res.status(400).json({
+                status: "ERROR",
+                message: "Name is required",
+            });
+        }
+
         const parsedExpiration = new Date(expiration_date);
         if (Number.isNaN(parsedExpiration.getTime())) {
             return res.status(400).json({
@@ -62,15 +70,15 @@ exports.addItemToFridge = async (req, res) => {
         }
 
         const upsertedFridgeItem = await FridgeItem.findOneAndUpdate(
-            { user_id, name, category, unit },
+            { user_id, name: normalizedName, category, unit },
             {
                 $set: { expiration_date: parsedExpiration },
                 $inc: { quantity: Number(quantity) },
-                $setOnInsert: { user_id, name, category, unit },
+                $setOnInsert: { user_id, name: normalizedName, category, unit },
             },
             {
                 upsert: true,
-                new: true,
+                returnDocument: 'after',
                 setDefaultsOnInsert: true,
             }
         );
