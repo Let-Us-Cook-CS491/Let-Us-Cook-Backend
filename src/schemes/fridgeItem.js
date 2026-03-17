@@ -18,9 +18,13 @@ const fridgeItemSchema = new mongoose.Schema(
 
 // One item per user per (name, category, unit).
 fridgeItemSchema.index(
-  { user_id: 1, name: 1, category: 1, unit: 1, location: 1 },
-  { unique: true, sparse: true }
+  { user_id: 1, name: 1, category: 1, unit: 1 },
+  { unique: true }
 );
+
+// Indexes to speed up getUserFridge filters + sorts.
+fridgeItemSchema.index({ user_id: 1, expiration_date: 1, name: 1 });
+fridgeItemSchema.index({ user_id: 1, category: 1, expiration_date: 1, name: 1 });
 
 const FridgeItem =
   mongoose.models.FridgeItem || mongoose.model('FridgeItem', fridgeItemSchema);
