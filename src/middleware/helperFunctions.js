@@ -22,4 +22,18 @@ function isValidCategory(category) {
     return true;
 }
 
-module.exports = { isValidTimeZone, isValidWeightUnit, isValidCategory };
+function isValidGoal(goal) {
+    if (goal !== "Lose Weight" && goal !== "Maintain Weight" && goal !== "Gain Weight") {
+        return false;
+    }
+    return true;
+}
+
+function isValidActivityLevel(activity) {
+    if (activity !== "Sedentary" && activity !== "Light" && activity !== "Moderate" && activity !== "Active" && activity !== "Very Active") {
+        return false;
+    }
+    return true;
+}
+
+module.exports = { isValidTimeZone, isValidWeightUnit, isValidCategory, isValidGoal, isValidActivityLevel };
