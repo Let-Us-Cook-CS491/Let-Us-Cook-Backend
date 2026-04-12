@@ -1,4 +1,5 @@
 const FridgeItem = require('../schemes/fridgeItem');
+const UserPreference = require('../schemes/userPreferences');
 const { connectMongo } = require('../config/databaseConnection');
 const { filterByMainIngredient, lookupMeal } = require('../services/theMealDbClient');
 
@@ -8,6 +9,8 @@ const DEFAULT_MAX_INGREDIENTS = 8;
 const MAX_MAX_INGREDIENTS = 12;
 /** Minimum candidate pool before capping by list length (see plan: max(limit × 2, 15)). */
 const MIN_LOOKUP_CANDIDATES = 15;
+/** Max TheMealDB lookups per suggest request when strict (no substitutions). */
+const MAX_TOTAL_LOOKUPS_STRICT = 50;
 
 function parsePositiveInt(value, fallback, max) {
   const n = Number(value);
@@ -37,6 +40,29 @@ function collectMealIngredientsNormalized(meal) {
   return out;
 }
 
+function buildRecipePayload(meal, matchCount, fridgeNameSet) {
+  const normalizedRecipeIngs = collectMealIngredientsNormalized(meal);
+  const recipeIngredients = [...new Set(normalizedRecipeIngs)];
+  const matchedIngredients = recipeIngredients.filter((ing) => fridgeNameSet.has(ing));
+  const missingIngredients = recipeIngredients.filter((ing) => !fridgeNameSet.has(ing));
+  return {
+    idMeal: meal.idMeal,
+    strMeal: meal.strMeal,
+    strMealThumb: meal.strMealThumb,
+    strCategory: meal.strCategory,
+    strArea: meal.strArea,
+    strInstructions: meal.strInstructions,
+    matchCount,
+    recipeIngredients,
+    matchedIngredients,
+    missingIngredients,
+  };
+}
+
+function lookupChunkSize(limit) {
+  return Math.min(Math.max(limit * 2, MIN_LOOKUP_CANDIDATES), MAX_TOTAL_LOOKUPS_STRICT);
+}
+
 exports.suggestRecipesFromFridge = async (req, res) => {
   try {
     await connectMongo();
@@ -57,9 +83,14 @@ exports.suggestRecipesFromFridge = async (req, res) => {
       MAX_MAX_INGREDIENTS
     );
 
-    const fridgeItems = await FridgeItem.find({ user_id }, { name: 1, expiration_date: 1 })
-      .sort({ expiration_date: 1, name: 1 })
-      .lean();
+    const [prefs, fridgeItems] = await Promise.all([
+      UserPreference.findOne({ user_id }).lean(),
+      FridgeItem.find({ user_id }, { name: 1, expiration_date: 1 })
+        .sort({ expiration_date: 1, name: 1 })
+        .lean(),
+    ]);
+
+    const allowSubstitutions = prefs?.allow_substitutions === true;
 
     if (!fridgeItems.length) {
       return res.status(200).json({
@@ -67,6 +98,8 @@ exports.suggestRecipesFromFridge = async (req, res) => {
         message: 'No fridge items to suggest from',
         data: {
           recipes: [],
+          allowSubstitutions,
+          filteredByMissing: false,
         },
       });
     }
@@ -113,6 +146,8 @@ exports.suggestRecipesFromFridge = async (req, res) => {
         message: 'No matching recipes found for your ingredients',
         data: {
           recipes: [],
+          allowSubstitutions,
+          filteredByMissing: !allowSubstitutions,
         },
       });
     }
@@ -126,60 +161,105 @@ exports.suggestRecipesFromFridge = async (req, res) => {
       return String(a.idMeal).localeCompare(String(b.idMeal));
     });
 
-    const lookupPoolSize = Math.min(
-      scored.length,
-      Math.max(limit * 2, MIN_LOOKUP_CANDIDATES)
-    );
-    const idsToLookup = scored.slice(0, lookupPoolSize).map((s) => s.idMeal);
-
-    const lookups = await Promise.all(
-      idsToLookup.map(async (idMeal) => {
-        try {
-          const meal = await lookupMeal(idMeal);
-          return { idMeal, meal };
-        } catch (e) {
-          console.error('TheMealDB lookup error:', idMeal, e?.message || e);
-          return { idMeal, meal: null };
-        }
-      })
-    );
-
     const matchCountById = new Map(scored.map((s) => [s.idMeal, s.matchCount]));
 
-    const recipes = [];
-    for (const { idMeal, meal } of lookups) {
-      if (!meal) continue;
-      const matchCount = matchCountById.get(idMeal) || 0;
-      const normalizedRecipeIngs = collectMealIngredientsNormalized(meal);
-      const recipeIngredients = [...new Set(normalizedRecipeIngs)];
-      const matchedIngredients = recipeIngredients.filter((ing) => fridgeNameSet.has(ing));
-      const missingIngredients = recipeIngredients.filter((ing) => !fridgeNameSet.has(ing));
-      recipes.push({
-        idMeal: meal.idMeal,
-        strMeal: meal.strMeal,
-        strMealThumb: meal.strMealThumb,
-        strCategory: meal.strCategory,
-        strArea: meal.strArea,
-        strInstructions: meal.strInstructions,
-        matchCount,
-        recipeIngredients,
-        matchedIngredients,
-        missingIngredients,
-      });
-    }
+    let recipes = [];
+    const filteredByMissing = !allowSubstitutions;
 
-    recipes.sort((a, b) => {
-      if (b.matchCount !== a.matchCount) return b.matchCount - a.matchCount;
-      return String(a.strMeal || '').localeCompare(String(b.strMeal || ''));
-    });
+    if (allowSubstitutions) {
+      const lookupPoolSize = Math.min(
+        scored.length,
+        Math.max(limit * 2, MIN_LOOKUP_CANDIDATES)
+      );
+      const idsToLookup = scored.slice(0, lookupPoolSize).map((s) => s.idMeal);
+
+      const lookups = await Promise.all(
+        idsToLookup.map(async (idMeal) => {
+          try {
+            const meal = await lookupMeal(idMeal);
+            return { idMeal, meal };
+          } catch (e) {
+            console.error('TheMealDB lookup error:', idMeal, e?.message || e);
+            return { idMeal, meal: null };
+          }
+        })
+      );
+
+      for (const { idMeal, meal } of lookups) {
+        if (!meal) continue;
+        const matchCount = matchCountById.get(idMeal) || 0;
+        recipes.push(buildRecipePayload(meal, matchCount, fridgeNameSet));
+      }
+
+      recipes.sort((a, b) => {
+        if (b.matchCount !== a.matchCount) return b.matchCount - a.matchCount;
+        return String(a.strMeal || '').localeCompare(String(b.strMeal || ''));
+      });
+    } else {
+      const strictRecipes = [];
+      const seenRecipeIds = new Set();
+      let cursor = 0;
+      let lookupsDone = 0;
+      const chunkCap = lookupChunkSize(limit);
+
+      while (
+        strictRecipes.length < limit &&
+        cursor < scored.length &&
+        lookupsDone < MAX_TOTAL_LOOKUPS_STRICT
+      ) {
+        const room = MAX_TOTAL_LOOKUPS_STRICT - lookupsDone;
+        const remaining = scored.length - cursor;
+        const chunk = Math.min(chunkCap, remaining, room);
+        if (chunk <= 0) break;
+
+        const idsBatch = scored.slice(cursor, cursor + chunk).map((s) => s.idMeal);
+        cursor += chunk;
+        lookupsDone += idsBatch.length;
+
+        const lookups = await Promise.all(
+          idsBatch.map(async (idMeal) => {
+            try {
+              const meal = await lookupMeal(idMeal);
+              return { idMeal, meal };
+            } catch (e) {
+              console.error('TheMealDB lookup error:', idMeal, e?.message || e);
+              return { idMeal, meal: null };
+            }
+          })
+        );
+
+        for (const { idMeal, meal } of lookups) {
+          if (!meal || seenRecipeIds.has(idMeal)) continue;
+          seenRecipeIds.add(idMeal);
+          const matchCount = matchCountById.get(idMeal) || 0;
+          const recipe = buildRecipePayload(meal, matchCount, fridgeNameSet);
+          if (recipe.missingIngredients.length === 0) {
+            strictRecipes.push(recipe);
+          }
+        }
+      }
+
+      strictRecipes.sort((a, b) => {
+        if (b.matchCount !== a.matchCount) return b.matchCount - a.matchCount;
+        return String(a.strMeal || '').localeCompare(String(b.strMeal || ''));
+      });
+      recipes = strictRecipes;
+    }
 
     const limited = recipes.slice(0, limit);
 
+    const message =
+      !allowSubstitutions && limited.length === 0
+        ? 'No recipes fully covered by your fridge without substitutions'
+        : 'Recipe suggestions';
+
     return res.status(200).json({
       status: 'OK',
-      message: 'Recipe suggestions',
+      message,
       data: {
         recipes: limited,
+        allowSubstitutions,
+        filteredByMissing,
       },
     });
   } catch (err) {

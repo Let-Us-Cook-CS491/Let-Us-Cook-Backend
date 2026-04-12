@@ -17,7 +17,7 @@ exports.setUserPreference = async (req, res) => {
             });
         }
         
-        const { current_diet, restrictions, smart_alerts } = req.body || {};
+        const { current_diet, restrictions, smart_alerts, allow_substitutions } = req.body || {};
         const normalized_diet = String(current_diet ?? '').trim() || 'Everything';
 
         const updateFields = {};
@@ -48,6 +48,10 @@ exports.setUserPreference = async (req, res) => {
             if (smart_alerts.kitchen_briefing !== undefined) {
                 updateFields['smart_alerts.kitchen_briefing'] = Boolean(smart_alerts.kitchen_briefing);
             }
+        }
+
+        if (allow_substitutions !== undefined) {
+            updateFields.allow_substitutions = Boolean(allow_substitutions);
         }
 
         if (Object.keys(updateFields).length === 0) {

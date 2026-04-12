@@ -9,6 +9,7 @@ const userPreferenceSchema = new mongoose.Schema(
       waste_prevention: { type: Boolean, default: false },
       kitchen_briefing: { type: Boolean, default: false },
     },
+    allow_substitutions: { type: Boolean, default: false },
   },
   {
     collection: 'UserPreferences',
