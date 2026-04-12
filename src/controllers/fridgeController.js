@@ -17,7 +17,7 @@ exports.addItemToFridge = async (req, res) => {
                 message: "Unauthorized",
             });
         }
-        
+
         const { name, category, expiration_date, quantity, unit, location } = req.body;
 
         if (!name || !category || !expiration_date || quantity === undefined || quantity === null || !unit) {
@@ -76,22 +76,22 @@ exports.addItemToFridge = async (req, res) => {
         const update = {
             $set: { expiration_date: parsedExpiration },
             $inc: { quantity: Number(quantity) },
-          };
-          
-          // Only add location if it's provided
-          if (location) {
+        };
+
+        // Only add location if it's provided
+        if (location) {
             update.$set.location = location;
-          }
-          
+        }
+
         const upsertedFridgeItem = await FridgeItem.findOneAndUpdate(
             filter,
             update,
             {
-              upsert: true,                 // create if not found
-              returnDocument: 'after',      // return the updated document
-              setDefaultsOnInsert: true,
+                upsert: true,                 // create if not found
+                returnDocument: 'after',      // return the updated document
+                setDefaultsOnInsert: true,
             }
-          ).lean();
+        ).lean();
 
         return res.status(200).json({
             status: "OK",
@@ -119,7 +119,7 @@ exports.removeItemFromFridge = async (req, res) => {
                 message: "Unauthorized User",
             });
         }
-        
+
         const { item_id, count } = req.body;
 
         if (!item_id) {
@@ -172,7 +172,7 @@ exports.removeItemFromFridge = async (req, res) => {
             message: "Failed to remove item from fridge",
         });
     }
-};        
+};
 
 exports.updateItemInFridge = async (req, res) => {
     try {
@@ -186,7 +186,7 @@ exports.updateItemInFridge = async (req, res) => {
                 message: "Unauthorized User",
             });
         }
-        
+
         const { item_id, name, category, expiration_date, quantity, unit, location } = req.body;
 
         if (!item_id) {
@@ -297,7 +297,7 @@ exports.updateItemInFridge = async (req, res) => {
             message: "Failed to update item from fridge",
         });
     }
-};   
+};
 
 exports.getUserFridge = async (req, res) => {
     try {
@@ -311,13 +311,12 @@ exports.getUserFridge = async (req, res) => {
                 message: "Unauthorized User",
             });
         }
-        
+
         const category = req.query?.category;
         const rawLimit = req.query?.limit;
         const rawSkip = req.query?.skip;
         const rawExpiringInDays = req.query?.expiringInDays;
 
-        const limit = Math.min(Math.max(Number(rawLimit) || 50, 1), 200);
         const skip = Math.max(Number(rawSkip) || 0, 0);
 
         const filter = { user_id };
@@ -326,15 +325,23 @@ exports.getUserFridge = async (req, res) => {
         }
 
         const expiringInDays = Number(rawExpiringInDays);
+        let expiryWindowApplied = false;
         if (Number.isFinite(expiringInDays) && expiringInDays > 0) {
+            const windowDays = Math.min(30, Math.max(1, Math.floor(expiringInDays)));
             const now = new Date();
-            const upper = new Date(now.getTime() + expiringInDays * 24 * 60 * 60 * 1000);
-            filter.expiration_date = { $gte: now, $lte: upper };
+            const upper = new Date(now.getTime() + windowDays * 24 * 60 * 60 * 1000);
+            filter.expiration_date = { $lte: upper };
+            expiryWindowApplied = true;
         }
 
-        const sort = filter.category
+        const sort = expiryWindowApplied
             ? { expiration_date: 1, name: 1 }
-            : { category: 1, expiration_date: 1, name: 1 };
+            : filter.category
+                ? { expiration_date: 1, name: 1 }
+                : { category: 1, expiration_date: 1, name: 1 };
+
+        const defaultLimit = expiryWindowApplied ? 200 : 50;
+        const limit = Math.min(Math.max(Number(rawLimit) || defaultLimit, 1), 200);
 
         const items = await FridgeItem
             .find(filter, { __v: 0 })
@@ -355,7 +362,7 @@ exports.getUserFridge = async (req, res) => {
             message: "Failed to fetch fridge items",
         });
     }
-};       
+};
 
 // INV 1.2: Upload receipt, extract items, update inventory
 exports.uploadReceiptToFridge = async (req, res) => {
@@ -401,7 +408,7 @@ exports.uploadReceiptToFridge = async (req, res) => {
                 skipped,
             });
         }
-        
+
         const receiptId = crypto.randomUUID();
 
         return res.status(200).json({
