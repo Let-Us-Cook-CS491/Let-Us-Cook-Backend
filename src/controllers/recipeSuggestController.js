@@ -2,6 +2,7 @@ const FridgeItem = require('../schemes/fridgeItem');
 const UserPreference = require('../schemes/userPreferences');
 const { connectMongo } = require('../config/databaseConnection');
 const { filterByMainIngredient, lookupMeal } = require('../services/theMealDbClient');
+const personalizedMealService = require('../services/personalizedMealService');
 
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 20;
@@ -16,6 +17,15 @@ function parsePositiveInt(value, fallback, max) {
   const n = Number(value);
   if (!Number.isFinite(n) || n < 1) return fallback;
   return Math.min(Math.floor(n), max);
+}
+
+function parseBoolean(value, fallback) {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'boolean') return value;
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1') return true;
+  if (normalized === 'false' || normalized === '0') return false;
+  return fallback;
 }
 
 function fridgeNameToFilterIngredient(name) {
@@ -267,6 +277,45 @@ exports.suggestRecipesFromFridge = async (req, res) => {
     return res.status(500).json({
       status: 'ERROR',
       message: 'Failed to suggest recipes',
+    });
+  }
+};
+
+exports.getPersonalizedRecommendations = async (req, res) => {
+  try {
+    const user_id = Number(req.user?.user_id);
+    if (!Number.isInteger(user_id)) {
+      return res.status(401).json({
+        status: 'ERROR',
+        message: 'Unauthorized',
+      });
+    }
+
+    const limit = parsePositiveInt(req.query?.limit, 5, 15);
+    const maxMissingIngredients = parsePositiveInt(req.query?.maxMissingIngredients, 4, 10);
+    const includeReasons = parseBoolean(req.query?.includeReasons, true);
+
+    const result = await personalizedMealService.getPersonalizedRecommendations({
+      userId: user_id,
+      limit,
+      maxMissingIngredients,
+      includeReasons,
+    });
+
+    return res.status(200).json({
+      status: 'OK',
+      message: 'Personalized meal recommendations generated',
+      data: {
+        recommendations: result.recommendations,
+        strategy: result.meta?.strategy || 'unknown',
+        candidateCount: result.meta?.candidateCount ?? 0,
+      },
+    });
+  } catch (err) {
+    console.error('getPersonalizedRecommendations error:', err);
+    return res.status(500).json({
+      status: 'ERROR',
+      message: 'Failed to generate personalized recommendations',
     });
   }
 };

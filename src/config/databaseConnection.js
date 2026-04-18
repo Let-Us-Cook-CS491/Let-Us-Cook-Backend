@@ -17,15 +17,17 @@ pool.on('error', (err) => {
     console.error('MySQL pool error:', err.code);
 });
 
-setTimeout(async () => {
+if (process.env.NODE_ENV !== 'test') {
+  setTimeout(async () => {
     try {
-      await db.query('SELECT 1'); 
+      await db.query('SELECT 1');
       console.log('Database connected successfully');
     } catch (err) {
       console.error('Database connection failed:', err.code);
       process.exit(1);
     }
   }, 5000);
+}
 
 
 let mongoConnectPromise = null;
