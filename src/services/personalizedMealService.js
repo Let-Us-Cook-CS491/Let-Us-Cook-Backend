@@ -2,7 +2,8 @@ const db = require('../config/databaseConnection');
 const { connectMongo } = require('../config/databaseConnection');
 const FridgeItem = require('../schemes/fridgeItem');
 const UserPreference = require('../schemes/userPreferences');
-const { filterByMainIngredient, lookupMeal } = require('./theMealDbClient');
+const { filterByMainIngredient } = require('./theMealDbClient');
+const { lookupMealsMongoFirst } = require('./mealDbRecipeCacheService');
 const { personalizeWithGemini } = require('./geminiMealPersonalizer');
 const {
   loadMacrosLookupMap,
@@ -151,15 +152,13 @@ async function buildCandidates(filterKeys, fridgeNameSet, maxMissingIngredients,
   const idsToLookup = scoreRows.slice(0, MAX_CANDIDATE_LOOKUPS).map((row) => row.idMeal);
   const scoreMap = new Map(scoreRows.map((row) => [row.idMeal, row.matchCount]));
 
-  const lookedUp = await Promise.all(
-    idsToLookup.map(async (idMeal) => {
-      try {
-        return await lookupMeal(idMeal);
-      } catch (err) {
-        return null;
-      }
-    })
-  );
+  let lookedUp;
+  try {
+    lookedUp = await lookupMealsMongoFirst(idsToLookup);
+  } catch (err) {
+    console.error('Recipe lookup error:', err?.message || err);
+    lookedUp = idsToLookup.map(() => null);
+  }
 
   return lookedUp
     .filter(Boolean)
