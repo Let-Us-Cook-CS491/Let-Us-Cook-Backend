@@ -3,6 +3,10 @@ const UserPreference = require('../schemes/userPreferences');
 const { connectMongo } = require('../config/databaseConnection');
 const { filterByMainIngredient, lookupMeal } = require('../services/theMealDbClient');
 const personalizedMealService = require('../services/personalizedMealService');
+const {
+  loadMacrosLookupMap,
+  buildRecipeNutritionFromMeal,
+} = require('../services/recipeNutritionService');
 
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 20;
@@ -50,11 +54,12 @@ function collectMealIngredientsNormalized(meal) {
   return out;
 }
 
-function buildRecipePayload(meal, matchCount, fridgeNameSet) {
+function buildRecipePayload(meal, matchCount, fridgeNameSet, macroMap) {
   const normalizedRecipeIngs = collectMealIngredientsNormalized(meal);
   const recipeIngredients = [...new Set(normalizedRecipeIngs)];
   const matchedIngredients = recipeIngredients.filter((ing) => fridgeNameSet.has(ing));
   const missingIngredients = recipeIngredients.filter((ing) => !fridgeNameSet.has(ing));
+  const nutrition = buildRecipeNutritionFromMeal(meal, macroMap);
   return {
     idMeal: meal.idMeal,
     strMeal: meal.strMeal,
@@ -66,6 +71,7 @@ function buildRecipePayload(meal, matchCount, fridgeNameSet) {
     recipeIngredients,
     matchedIngredients,
     missingIngredients,
+    nutrition,
   };
 }
 
@@ -162,6 +168,13 @@ exports.suggestRecipesFromFridge = async (req, res) => {
       });
     }
 
+    let macroMap = new Map();
+    try {
+      macroMap = await loadMacrosLookupMap();
+    } catch (e) {
+      console.error('Macros collection load error:', e?.message || e);
+    }
+
     const scored = [...idToMatchCount.entries()].map(([idMeal, matchCount]) => ({
       idMeal,
       matchCount,
@@ -198,7 +211,7 @@ exports.suggestRecipesFromFridge = async (req, res) => {
       for (const { idMeal, meal } of lookups) {
         if (!meal) continue;
         const matchCount = matchCountById.get(idMeal) || 0;
-        recipes.push(buildRecipePayload(meal, matchCount, fridgeNameSet));
+        recipes.push(buildRecipePayload(meal, matchCount, fridgeNameSet, macroMap));
       }
 
       recipes.sort((a, b) => {
@@ -242,7 +255,7 @@ exports.suggestRecipesFromFridge = async (req, res) => {
           if (!meal || seenRecipeIds.has(idMeal)) continue;
           seenRecipeIds.add(idMeal);
           const matchCount = matchCountById.get(idMeal) || 0;
-          const recipe = buildRecipePayload(meal, matchCount, fridgeNameSet);
+          const recipe = buildRecipePayload(meal, matchCount, fridgeNameSet, macroMap);
           if (recipe.missingIngredients.length === 0) {
             strictRecipes.push(recipe);
           }
