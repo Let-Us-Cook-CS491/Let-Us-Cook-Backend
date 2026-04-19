@@ -575,10 +575,10 @@ exports.createFridgeInvite = async (req, res) => {
             });
         }
 
-        const invite_code = crypto.randomBytes(24).toString('hex');
+        const invite_code = crypto.randomBytes(6).toString('hex');
         const insertInviteQuery = `
             INSERT INTO fridge_invites (fridge_id, invite_code, created_by, expires_at, used_at)
-            VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY), NULL)
+            VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 1 DAY), NULL)
         `;
         const [insertInviteResult] = await connection.execute(insertInviteQuery, [
             fridge_id,
