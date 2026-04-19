@@ -162,7 +162,25 @@ exports.removeItemFromFridge = async (req, res) => {
             });
         }
 
-        const existing = await FridgeItem.findOne({ user_id, _id: item_id }).lean();
+        const getUserFridgeQuery = `SELECT fridge_id FROM users WHERE user_id = ?`;
+        const [userRows] = await db.execute(getUserFridgeQuery, [user_id]);
+        const userFridge = userRows?.[0];
+        if (!userFridge) {
+            return res.status(404).json({
+                status: "ERROR",
+                message: "User not found",
+            });
+        }
+
+        const derivedFridgeId = Number(userFridge.fridge_id);
+        if (!Number.isInteger(derivedFridgeId) || derivedFridgeId < 1) {
+            return res.status(400).json({
+                status: "ERROR",
+                message: "User does not have a valid fridge",
+            });
+        }
+
+        const existing = await FridgeItem.findOne({ fridge_id: derivedFridgeId, _id: item_id }).lean();
         if (!existing) {
             return res.status(404).json({
                 status: "ERROR",
@@ -172,7 +190,7 @@ exports.removeItemFromFridge = async (req, res) => {
 
         const newQuantity = Number(existing.quantity) - removeCount;
         if (newQuantity <= 0) {
-            await FridgeItem.deleteOne({ user_id, _id: item_id });
+            await FridgeItem.deleteOne({ fridge_id: derivedFridgeId, _id: item_id });
             return res.status(200).json({
                 status: "OK",
                 message: "Item removed from fridge",
@@ -180,7 +198,7 @@ exports.removeItemFromFridge = async (req, res) => {
         }
 
         const updated = await FridgeItem.findOneAndUpdate(
-            { user_id, _id: item_id },
+            { fridge_id: derivedFridgeId, _id: item_id },
             { $set: { quantity: newQuantity } },
             { returnDocument: 'after' }
         ).lean();
