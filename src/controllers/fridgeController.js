@@ -230,6 +230,24 @@ exports.updateItemInFridge = async (req, res) => {
             });
         }
 
+        const getUserFridgeQuery = `SELECT fridge_id FROM users WHERE user_id = ?`;
+        const [userRows] = await db.execute(getUserFridgeQuery, [user_id]);
+        const userFridge = userRows?.[0];
+        if (!userFridge) {
+            return res.status(404).json({
+                status: "ERROR",
+                message: "User not found",
+            });
+        }
+
+        const derivedFridgeId = Number(userFridge.fridge_id);
+        if (!Number.isInteger(derivedFridgeId) || derivedFridgeId < 1) {
+            return res.status(400).json({
+                status: "ERROR",
+                message: "User does not have a valid fridge",
+            });
+        }
+
         const { item_id, name, category, expiration_date, quantity, unit, location } = req.body;
 
         if (!item_id) {
@@ -309,7 +327,7 @@ exports.updateItemInFridge = async (req, res) => {
         }
 
         const updatedFridgeItem = await FridgeItem.findOneAndUpdate(
-            { user_id, _id: item_id },
+            { fridge_id: derivedFridgeId, _id: item_id },
             { $set: updateFields },
             { returnDocument: 'after' }
         ).lean();
