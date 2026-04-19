@@ -8,6 +8,8 @@ const {
   loadMacrosLookupMap,
   buildRecipeNutritionFromMeal,
 } = require('./recipeNutritionService');
+const { resolveFridgeIdForUser } = require('./userFridgeResolver');
+const { buildFridgeMatchingFromInventory, normalizeFridgeName } = require('./fridgeInventoryMatching');
 
 const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 15;
@@ -20,13 +22,6 @@ function normalizeIngredient(value) {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, ' ');
-}
-
-function fridgeNameToFilterIngredient(name) {
-  return String(name || '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, '_');
 }
 
 function collectMealIngredientsNormalized(meal) {
@@ -123,12 +118,16 @@ function buildRecipePayload(meal, matchCount, fridgeNameSet, macroMap) {
   };
 }
 
-async function buildCandidates(fridgeNames, maxMissingIngredients, macroMap) {
+async function buildCandidates(filterKeys, fridgeNameSet, maxMissingIngredients, macroMap) {
   const map = macroMap instanceof Map ? macroMap : new Map();
+  const keys = Array.isArray(filterKeys) ? filterKeys : [];
+  const nameSet =
+    fridgeNameSet instanceof Set ? fridgeNameSet : new Set(Array.isArray(fridgeNameSet) ? fridgeNameSet : []);
+
   const filterResults = await Promise.all(
-    fridgeNames.map(async (name) => {
+    keys.map(async (key) => {
       try {
-        return await filterByMainIngredient(fridgeNameToFilterIngredient(name));
+        return await filterByMainIngredient(key);
       } catch (err) {
         return { meals: null };
       }
@@ -150,7 +149,6 @@ async function buildCandidates(fridgeNames, maxMissingIngredients, macroMap) {
     .sort((a, b) => b.matchCount - a.matchCount);
 
   const idsToLookup = scoreRows.slice(0, MAX_CANDIDATE_LOOKUPS).map((row) => row.idMeal);
-  const fridgeNameSet = new Set(fridgeNames.map((name) => normalizeIngredient(name)));
   const scoreMap = new Map(scoreRows.map((row) => [row.idMeal, row.matchCount]));
 
   const lookedUp = await Promise.all(
@@ -165,7 +163,7 @@ async function buildCandidates(fridgeNames, maxMissingIngredients, macroMap) {
 
   return lookedUp
     .filter(Boolean)
-    .map((meal) => buildRecipePayload(meal, scoreMap.get(meal.idMeal) || 0, fridgeNameSet, map))
+    .map((meal) => buildRecipePayload(meal, scoreMap.get(meal.idMeal) || 0, nameSet, map))
     .filter((recipe) => recipe.missingIngredients.length <= maxMissingIngredients);
 }
 
@@ -174,7 +172,15 @@ function createPersonalizedMealService(deps = {}) {
   const readPreferences = deps.readPreferences || ((userId) => UserPreference.findOne({ user_id: userId }).lean());
   const readInventory =
     deps.readInventory ||
-    ((userId) => FridgeItem.find({ user_id: userId }, { name: 1 }).sort({ expiration_date: 1 }).lean());
+    (async (userId) => {
+      const resolved = await resolveFridgeIdForUser(userId);
+      if (resolved.status !== 'OK') {
+        return [];
+      }
+      return FridgeItem.find({ fridge_id: resolved.fridgeId }, { name: 1 })
+        .sort({ expiration_date: 1, name: 1 })
+        .lean();
+    });
   const readGoals = deps.readHealthGoals || readHealthGoals;
   const createCandidates = deps.buildCandidates || buildCandidates;
   const aiPersonalizer = deps.personalizeWithGemini || personalizeWithGemini;
@@ -208,17 +214,39 @@ function createPersonalizedMealService(deps = {}) {
       };
     }
 
+    const uniqueNameCount = new Set(
+      inventory.map((item) => normalizeFridgeName(item?.name)).filter(Boolean)
+    ).size;
+    const inventoryMatching = buildFridgeMatchingFromInventory(inventory, uniqueNameCount);
+
     const restrictionTerms = parseRestrictionTerms(preferences);
-    const candidateRecipes = (await createCandidates(fridgeNames, maxMissingIngredients, macroMap)).filter(
-      (recipe) => !violatesRestrictions(recipe.recipeIngredients, restrictionTerms)
-    );
+    const candidateRecipes = (
+      await createCandidates(
+        inventoryMatching.filterKeys,
+        inventoryMatching.fridgeNameSet,
+        maxMissingIngredients,
+        macroMap
+      )
+    ).filter((recipe) => !violatesRestrictions(recipe.recipeIngredients, restrictionTerms));
 
     if (!candidateRecipes.length) {
       return {
         recommendations: [],
-        meta: { strategy: 'guardrail_filtered', candidateCount: 0 },
+        meta: {
+          strategy: 'guardrail_filtered',
+          candidateCount: 0,
+          matchingHeuristicUsed: inventoryMatching.matchingHeuristicUsed,
+          matchingDisclaimer: inventoryMatching.matchingDisclaimer,
+          expandedInventoryNames: inventoryMatching.expandedInventoryNames,
+        },
       };
     }
+
+    const matchingMeta = {
+      matchingHeuristicUsed: inventoryMatching.matchingHeuristicUsed,
+      matchingDisclaimer: inventoryMatching.matchingDisclaimer,
+      expandedInventoryNames: inventoryMatching.expandedInventoryNames,
+    };
 
     const promptProfile = {
       currentDiet: preferences?.current_diet || 'Everything',
@@ -269,7 +297,7 @@ function createPersonalizedMealService(deps = {}) {
       if (merged.length) {
         return {
           recommendations: merged.slice(0, limit),
-          meta: { strategy: 'llm_first', candidateCount: candidateRecipes.length },
+          meta: { strategy: 'llm_first', candidateCount: candidateRecipes.length, ...matchingMeta },
         };
       }
     } catch (err) {
@@ -278,7 +306,7 @@ function createPersonalizedMealService(deps = {}) {
 
     return {
       recommendations: deterministicRank(candidateRecipes, limit, includeReasons),
-      meta: { strategy: 'deterministic_fallback', candidateCount: candidateRecipes.length },
+      meta: { strategy: 'deterministic_fallback', candidateCount: candidateRecipes.length, ...matchingMeta },
     };
   }
 
