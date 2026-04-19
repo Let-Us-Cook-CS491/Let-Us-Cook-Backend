@@ -4,6 +4,10 @@ const FridgeItem = require('../schemes/fridgeItem');
 const UserPreference = require('../schemes/userPreferences');
 const { filterByMainIngredient, lookupMeal } = require('./theMealDbClient');
 const { personalizeWithGemini } = require('./geminiMealPersonalizer');
+const {
+  loadMacrosLookupMap,
+  buildRecipeNutritionFromMeal,
+} = require('./recipeNutritionService');
 
 const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 15;
@@ -97,10 +101,11 @@ async function readHealthGoals(userId) {
   return rows?.[0] || null;
 }
 
-function buildRecipePayload(meal, matchCount, fridgeNameSet) {
+function buildRecipePayload(meal, matchCount, fridgeNameSet, macroMap) {
   const recipeIngredients = collectMealIngredientsNormalized(meal);
   const matchedIngredients = recipeIngredients.filter((ing) => fridgeNameSet.has(ing));
   const missingIngredients = recipeIngredients.filter((ing) => !fridgeNameSet.has(ing));
+  const nutrition = buildRecipeNutritionFromMeal(meal, macroMap);
 
   return {
     idMeal: String(meal.idMeal),
@@ -114,10 +119,12 @@ function buildRecipePayload(meal, matchCount, fridgeNameSet) {
     missingIngredients,
     matchCount,
     cookMinutesEstimate: extractMinutes(meal),
+    nutrition,
   };
 }
 
-async function buildCandidates(fridgeNames, maxMissingIngredients) {
+async function buildCandidates(fridgeNames, maxMissingIngredients, macroMap) {
+  const map = macroMap instanceof Map ? macroMap : new Map();
   const filterResults = await Promise.all(
     fridgeNames.map(async (name) => {
       try {
@@ -158,7 +165,7 @@ async function buildCandidates(fridgeNames, maxMissingIngredients) {
 
   return lookedUp
     .filter(Boolean)
-    .map((meal) => buildRecipePayload(meal, scoreMap.get(meal.idMeal) || 0, fridgeNameSet))
+    .map((meal) => buildRecipePayload(meal, scoreMap.get(meal.idMeal) || 0, fridgeNameSet, map))
     .filter((recipe) => recipe.missingIngredients.length <= maxMissingIngredients);
 }
 
@@ -180,6 +187,13 @@ function createPersonalizedMealService(deps = {}) {
   }) {
     await loadMongo();
 
+    let macroMap = new Map();
+    try {
+      macroMap = await loadMacrosLookupMap();
+    } catch (err) {
+      console.error('Macros collection load error:', err?.message || err);
+    }
+
     const [preferences, healthGoals, inventory] = await Promise.all([
       readPreferences(userId),
       readGoals(userId),
@@ -195,7 +209,7 @@ function createPersonalizedMealService(deps = {}) {
     }
 
     const restrictionTerms = parseRestrictionTerms(preferences);
-    const candidateRecipes = (await createCandidates(fridgeNames, maxMissingIngredients)).filter(
+    const candidateRecipes = (await createCandidates(fridgeNames, maxMissingIngredients, macroMap)).filter(
       (recipe) => !violatesRestrictions(recipe.recipeIngredients, restrictionTerms)
     );
 
