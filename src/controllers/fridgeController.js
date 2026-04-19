@@ -515,6 +515,16 @@ exports.confirmReceiptItems = async (req, res) => {
             });
         }
 
+        const getUserFridgeQuery = `SELECT fridge_id FROM users WHERE user_id = ?`;
+        const [userRows] = await db.execute(getUserFridgeQuery, [user_id]);
+        const userFridge = userRows?.[0];
+        if (!userFridge) {
+            return res.status(404).json({
+                status: "ERROR",
+                message: "User not found",
+            });
+        }
+
         const { items, item, location } = req.body || {};
         const resolvedItems = Array.isArray(items) ? items : (item ? [item] : []);
         if (resolvedItems.length === 0) {
@@ -565,7 +575,7 @@ exports.confirmReceiptItems = async (req, res) => {
                 continue;
             }
 
-            const filter = { user_id, name: normalizedName, category, unit };
+            const filter = { fridge_id: userFridge.fridge_id, name: normalizedName, category, unit };
             const existing = await FridgeItem.findOne(filter).select({ _id: 1 }).lean();
             const incBy = existing ? 1 : Number(quantity);
 
