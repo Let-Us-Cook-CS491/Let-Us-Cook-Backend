@@ -206,11 +206,15 @@ function createPersonalizedMealService(deps = {}) {
       readInventory(userId),
     ]);
 
+    const allowSubstitutions = preferences?.allow_substitutions === true;
+    const filteredByMissing = !allowSubstitutions;
+    const substitutionMeta = { allowSubstitutions, filteredByMissing };
+
     const fridgeNames = [...new Set(inventory.map((item) => normalizeIngredient(item.name)).filter(Boolean))];
     if (!fridgeNames.length) {
       return {
         recommendations: [],
-        meta: { strategy: 'none', candidateCount: 0 },
+        meta: { strategy: 'none', candidateCount: 0, ...substitutionMeta },
       };
     }
 
@@ -219,12 +223,14 @@ function createPersonalizedMealService(deps = {}) {
     ).size;
     const inventoryMatching = buildFridgeMatchingFromInventory(inventory, uniqueNameCount);
 
+    const effectiveMaxMissing = allowSubstitutions ? maxMissingIngredients : 0;
+
     const restrictionTerms = parseRestrictionTerms(preferences);
     const candidateRecipes = (
       await createCandidates(
         inventoryMatching.filterKeys,
         inventoryMatching.fridgeNameSet,
-        maxMissingIngredients,
+        effectiveMaxMissing,
         macroMap
       )
     ).filter((recipe) => !violatesRestrictions(recipe.recipeIngredients, restrictionTerms));
@@ -238,6 +244,7 @@ function createPersonalizedMealService(deps = {}) {
           matchingHeuristicUsed: inventoryMatching.matchingHeuristicUsed,
           matchingDisclaimer: inventoryMatching.matchingDisclaimer,
           expandedInventoryNames: inventoryMatching.expandedInventoryNames,
+          ...substitutionMeta,
         },
       };
     }
@@ -246,12 +253,13 @@ function createPersonalizedMealService(deps = {}) {
       matchingHeuristicUsed: inventoryMatching.matchingHeuristicUsed,
       matchingDisclaimer: inventoryMatching.matchingDisclaimer,
       expandedInventoryNames: inventoryMatching.expandedInventoryNames,
+      ...substitutionMeta,
     };
 
     const promptProfile = {
       currentDiet: preferences?.current_diet || 'Everything',
       restrictions: preferences?.restrictions || [],
-      allowSubstitutions: preferences?.allow_substitutions === true,
+      allowSubstitutions,
       healthGoal: healthGoals?.goal || null,
       activityLevel: healthGoals?.activity_level || null,
       calorieTarget: healthGoals?.calorie_target ?? null,

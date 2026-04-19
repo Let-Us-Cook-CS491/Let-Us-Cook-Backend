@@ -73,6 +73,8 @@ exports.getPersonalizedRecommendations = async (req, res) => {
       recommendations: result.recommendations,
       strategy: meta.strategy || 'unknown',
       candidateCount: meta.candidateCount ?? 0,
+      allowSubstitutions: meta.allowSubstitutions === true,
+      filteredByMissing: meta.filteredByMissing === true,
     };
     if (meta.matchingHeuristicUsed) {
       data.matchingHeuristicUsed = true;
