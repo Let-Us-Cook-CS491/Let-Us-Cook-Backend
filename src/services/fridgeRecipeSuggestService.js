@@ -1,7 +1,8 @@
 const FridgeItem = require('../schemes/fridgeItem');
 const UserPreference = require('../schemes/userPreferences');
 const { connectMongo } = require('../config/databaseConnection');
-const { filterByMainIngredient, lookupMeal } = require('./theMealDbClient');
+const { filterByMainIngredient } = require('./theMealDbClient');
+const { lookupMealsMongoFirst } = require('./mealDbRecipeCacheService');
 const { resolveFridgeIdForUser } = require('./userFridgeResolver');
 const { buildFridgeMatchingFromInventory, normalizeFridgeName } = require('./fridgeInventoryMatching');
 const { loadMacrosLookupMap, buildRecipeNutritionFromMeal } = require('./recipeNutritionService');
@@ -196,17 +197,14 @@ async function runSuggestFromFridge(params) {
     const lookupPoolSize = Math.min(scored.length, Math.max(limit * 2, MIN_LOOKUP_CANDIDATES));
     const idsToLookup = scored.slice(0, lookupPoolSize).map((s) => s.idMeal);
 
-    const lookups = await Promise.all(
-      idsToLookup.map(async (idMeal) => {
-        try {
-          const meal = await lookupMeal(idMeal);
-          return { idMeal, meal };
-        } catch (e) {
-          console.error('TheMealDB lookup error:', idMeal, e?.message || e);
-          return { idMeal, meal: null };
-        }
-      })
-    );
+    let meals;
+    try {
+      meals = await lookupMealsMongoFirst(idsToLookup);
+    } catch (e) {
+      console.error('Recipe lookup error:', e?.message || e);
+      meals = idsToLookup.map(() => null);
+    }
+    const lookups = idsToLookup.map((idMeal, idx) => ({ idMeal, meal: meals[idx] ?? null }));
 
     for (const { idMeal, meal } of lookups) {
       if (!meal) continue;
@@ -239,17 +237,14 @@ async function runSuggestFromFridge(params) {
       cursor += chunk;
       lookupsDone += idsBatch.length;
 
-      const lookups = await Promise.all(
-        idsBatch.map(async (idMeal) => {
-          try {
-            const meal = await lookupMeal(idMeal);
-            return { idMeal, meal };
-          } catch (e) {
-            console.error('TheMealDB lookup error:', idMeal, e?.message || e);
-            return { idMeal, meal: null };
-          }
-        })
-      );
+      let meals;
+      try {
+        meals = await lookupMealsMongoFirst(idsBatch);
+      } catch (e) {
+        console.error('Recipe lookup error:', e?.message || e);
+        meals = idsBatch.map(() => null);
+      }
+      const lookups = idsBatch.map((idMeal, idx) => ({ idMeal, meal: meals[idx] ?? null }));
 
       for (const { idMeal, meal } of lookups) {
         if (!meal || seenRecipeIds.has(idMeal)) continue;

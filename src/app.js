@@ -6,6 +6,7 @@ const authRoutes = require('./routes/auth');
 const fridgeRoutes = require('./routes/fridge');
 const userRoutes = require('./routes/user');
 const recipesRoutes = require('./routes/recipes');
+const mealPlansRoutes = require('./routes/mealPlans');
 
 const app = express();
 
@@ -17,5 +18,6 @@ app.use('/api/auth', authRoutes);
 app.use('/api/fridge', fridgeRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/recipes', recipesRoutes);
+app.use('/api/plans', mealPlansRoutes);
 
 module.exports = app;
