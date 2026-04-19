@@ -373,6 +373,16 @@ exports.getUserFridge = async (req, res) => {
             });
         }
 
+        const getUserFridgeQuery = `SELECT fridge_id FROM users WHERE user_id = ?`;
+        const [userRows] = await db.execute(getUserFridgeQuery, [user_id]);
+        const userFridge = userRows?.[0];
+        if (!userFridge) {
+            return res.status(404).json({
+                status: "ERROR",
+                message: "User not found",
+            });
+        }
+
         const category = req.query?.category;
         const rawLimit = req.query?.limit;
         const rawSkip = req.query?.skip;
@@ -380,7 +390,7 @@ exports.getUserFridge = async (req, res) => {
 
         const skip = Math.max(Number(rawSkip) || 0, 0);
 
-        const filter = { user_id };
+        const filter = { fridge_id: userFridge.fridge_id };
         if (category !== undefined && category !== null && String(category).trim() !== '') {
             filter.category = String(category).trim();
         }
