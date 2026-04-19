@@ -1,4 +1,5 @@
 const FridgeItem = require('../schemes/fridgeItem');
+const db = require('../config/databaseConnection');
 const { isValidWeightUnit, isValidCategory } = require('../middleware/helperFunctions');
 const { connectMongo } = require('../config/databaseConnection');
 const { extractReceiptText } = require('../services/receiptOcrService');
@@ -530,6 +531,227 @@ exports.confirmReceiptItems = async (req, res) => {
             status: "ERROR",
             message: "Failed to confirm receipt items",
         });
+    }
+};
+
+exports.createFridgeInvite = async (req, res) => {
+    let connection;
+    try {
+        const user_id = Number(req.user?.user_id);
+        const fridge_id = Number(req.params?.fridgeId);
+
+        if (!Number.isInteger(user_id)) {
+            return res.status(401).json({
+                status: "ERROR",
+                message: "Unauthorized",
+            });
+        }
+
+        if (!Number.isInteger(fridge_id) || fridge_id < 1) {
+            return res.status(400).json({
+                status: "ERROR",
+                message: "Invalid fridgeId",
+            });
+        }
+
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+
+        const verifyOwnershipQuery = `SELECT fridge_id FROM users WHERE user_id = ? LIMIT 1`;
+        const [ownerRows] = await connection.execute(verifyOwnershipQuery, [user_id]);
+        if (ownerRows.length === 0) {
+            await connection.rollback();
+            return res.status(404).json({
+                status: "ERROR",
+                message: "User not found",
+            });
+        }
+
+        if (Number(ownerRows[0].fridge_id) !== fridge_id) {
+            await connection.rollback();
+            return res.status(403).json({
+                status: "ERROR",
+                message: "You can only create invites for your own fridge",
+            });
+        }
+
+        const invite_code = crypto.randomBytes(24).toString('hex');
+        const insertInviteQuery = `
+            INSERT INTO fridge_invites (fridge_id, invite_code, created_by, expires_at, used_at)
+            VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 7 DAY), NULL)
+        `;
+        const [insertInviteResult] = await connection.execute(insertInviteQuery, [
+            fridge_id,
+            invite_code,
+            user_id,
+        ]);
+
+        if (insertInviteResult.affectedRows === 0) {
+            await connection.rollback();
+            return res.status(500).json({
+                status: "ERROR",
+                message: "Failed to create invite",
+            });
+        }
+
+        await connection.commit();
+        return res.status(201).json({
+            status: "OK",
+            message: "Invite created",
+            data: {
+                invite_code,
+            },
+        });
+    } catch (err) {
+        if (connection) await connection.rollback();
+        console.error('createFridgeInvite error:', err);
+        return res.status(500).json({
+            status: "ERROR",
+            message: "Failed to create fridge invite",
+        });
+    } finally {
+        if (connection) await connection.release();
+    }
+};
+
+exports.joinFridgeByInvite = async (req, res) => {
+    let connection;
+    try {
+        const user_id = Number(req.user?.user_id);
+        const invite_code = String(req.body?.invite_code || '').trim();
+
+        if (!Number.isInteger(user_id)) {
+            return res.status(401).json({
+                status: "ERROR",
+                message: "Unauthorized",
+            });
+        }
+
+        if (!invite_code) {
+            return res.status(400).json({
+                status: "ERROR",
+                message: "invite_code is required",
+            });
+        }
+
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+
+        const findInviteQuery = `
+            SELECT invite_id, fridge_id, used_at, expires_at
+            FROM fridge_invites
+            WHERE invite_code = ?
+            LIMIT 1
+            FOR UPDATE
+        `;
+        const [inviteRows] = await connection.execute(findInviteQuery, [invite_code]);
+
+        if (inviteRows.length === 0) {
+            await connection.rollback();
+            return res.status(404).json({
+                status: "ERROR",
+                message: "Invite code not found",
+            });
+        }
+
+        const invite = inviteRows[0];
+        if (invite.used_at) {
+            await connection.rollback();
+            return res.status(409).json({
+                status: "ERROR",
+                message: "Invite code has already been used",
+            });
+        }
+
+        if (invite.expires_at && new Date(invite.expires_at).getTime() < Date.now()) {
+            await connection.rollback();
+            return res.status(410).json({
+                status: "ERROR",
+                message: "Invite code has expired",
+            });
+        }
+
+        const findUserFridgeQuery = `
+            SELECT fridge_id
+            FROM users
+            WHERE user_id = ?
+            LIMIT 1
+            FOR UPDATE
+        `;
+        const [userRows] = await connection.execute(findUserFridgeQuery, [user_id]);
+        if (userRows.length === 0) {
+            await connection.rollback();
+            return res.status(404).json({
+                status: "ERROR",
+                message: "User not found",
+            });
+        }
+
+        if (Number(userRows[0].fridge_id) === Number(invite.fridge_id)) {
+            await connection.rollback();
+            return res.status(409).json({
+                status: "ERROR",
+                message: "You are already in this fridge",
+            });
+        }
+
+        const previousFridgeId = Number(userRows[0].fridge_id);
+
+        const updateUserFridgeQuery = `
+            UPDATE users
+            SET fridge_id = ?
+            WHERE user_id = ?
+        `;
+        const [userUpdateResult] = await connection.execute(updateUserFridgeQuery, [
+            invite.fridge_id,
+            user_id,
+        ]);
+
+        if (userUpdateResult.affectedRows === 0) {
+            await connection.rollback();
+            return res.status(404).json({
+                status: "ERROR",
+                message: "User not found",
+            });
+        }
+
+        const markInviteUsedQuery = `
+            UPDATE fridge_invites
+            SET used_at = NOW()
+            WHERE invite_id = ?
+        `;
+        await connection.execute(markInviteUsedQuery, [invite.invite_id]);
+
+            const countUsersInOldFridgeQuery = `
+                SELECT COUNT(*) AS user_count
+                FROM users
+                WHERE fridge_id = ?
+            `;
+            const [countRows] = await connection.execute(countUsersInOldFridgeQuery, [previousFridgeId]);
+            const remainingUsers = Number(countRows?.[0]?.user_count || 0);
+
+            if (remainingUsers === 0) {
+                const deleteOldFridgeQuery = `
+                    DELETE FROM fridge
+                    WHERE fridge_id = ?
+                `;
+                await connection.execute(deleteOldFridgeQuery, [previousFridgeId]);
+            }
+
+        await connection.commit();
+        return res.status(200).json({
+            status: "OK",
+            message: "Joined fridge successfully",
+        });
+    } catch (err) {
+        if (connection) await connection.rollback();
+        console.error('joinFridgeByInvite error:', err);
+        return res.status(500).json({
+            status: "ERROR",
+            message: "Failed to join fridge",
+        });
+    } finally {
+        if (connection) await connection.release();
     }
 };
 

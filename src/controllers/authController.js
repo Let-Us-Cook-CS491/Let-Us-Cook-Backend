@@ -160,6 +160,7 @@ exports.signup = async (req, res) => {
             data: {
                 user_id: userId,
                 email: email,
+                fridge_id: insertFridgeEventResult.insertId,
                 accessToken: tokens.accessToken,
                 refreshToken: tokens.refreshToken,
             },
@@ -211,7 +212,7 @@ exports.login = async (req, res) => {
         connection = await db.getConnection();
 
         // Find user by email
-        const findUserQuery = `SELECT user_id, email FROM users WHERE email = ?`;
+        const findUserQuery = `SELECT user_id, email, fridge_id FROM users WHERE email = ?`;
         const [userResult] = await connection.execute(findUserQuery, [email]);
 
         if (userResult.length === 0) {
@@ -278,6 +279,7 @@ exports.login = async (req, res) => {
             data: {
                 user_id: user.user_id,
                 email: user.email,
+                fridge_id: user.fridge_id,
                 accessToken: tokens.accessToken,
                 refreshToken: tokens.refreshToken,
             },
