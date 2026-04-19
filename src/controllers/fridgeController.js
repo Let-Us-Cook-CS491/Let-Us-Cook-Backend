@@ -18,13 +18,30 @@ exports.addItemToFridge = async (req, res) => {
                 message: "Unauthorized",
             });
         }
-
         const { name, category, expiration_date, quantity, unit, location } = req.body;
 
         if (!name || !category || !expiration_date || quantity === undefined || quantity === null || !unit) {
             return res.status(400).json({
                 status: "ERROR",
-                message: "All fields are required",
+                message: "name, category, expiration_date, quantity, and unit are required",
+            });
+        }
+
+        const getUserFridgeQuery = `SELECT fridge_id FROM users WHERE user_id = ?`;
+        const [userRows] = await db.execute(getUserFridgeQuery, [user_id]);
+        const userFridge = userRows?.[0];
+        if (!userFridge) {
+            return res.status(404).json({
+                status: "ERROR",
+                message: "User not found",
+            });
+        }
+
+        const derivedFridgeId = Number(userFridge.fridge_id);
+        if (!Number.isInteger(derivedFridgeId) || derivedFridgeId < 1) {
+            return res.status(400).json({
+                status: "ERROR",
+                message: "User does not have a valid fridge",
             });
         }
 
@@ -72,15 +89,22 @@ exports.addItemToFridge = async (req, res) => {
             });
         }
 
-        const filter = { user_id, name: normalizedName, category, unit };
+        const filter = { fridge_id: derivedFridgeId, name: normalizedName, category, unit };
+
+        const existingItem = await FridgeItem.findOne(filter, { expiration_date: 1 }).lean();
 
         const update = {
-            $set: { expiration_date: parsedExpiration },
             $inc: { quantity: Number(quantity) },
         };
 
-        // Only add location if it's provided
+        // Only move expiration earlier (closer to expiring); never push it later.
+        if (!existingItem?.expiration_date || parsedExpiration.getTime() < new Date(existingItem.expiration_date).getTime()) {
+            update.$set = { expiration_date: parsedExpiration };
+        }
+
+        // Only add location if it's provided ($set may be absent if expiration was not updated)
         if (location) {
+            if (!update.$set) update.$set = {};
             update.$set.location = location;
         }
 
