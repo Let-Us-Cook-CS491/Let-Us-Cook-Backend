@@ -325,6 +325,7 @@ function createPersonalizedMealService(deps = {}) {
 module.exports = {
   createPersonalizedMealService,
   getPersonalizedRecommendations: createPersonalizedMealService().getPersonalizedRecommendations,
+  readHealthGoals,
   __private: {
     deterministicRank,
     parseRestrictionTerms,

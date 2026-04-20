@@ -1,4 +1,5 @@
 const weeklyMealPlanService = require('../services/weeklyMealPlanService');
+const { rebalanceWeekPlanForCalories } = require('../services/mealPlanCalorieRebalanceService');
 
 function parseQueryBool(value, defaultValue) {
   if (value === undefined || value === null || value === '') return defaultValue;
@@ -105,7 +106,8 @@ exports.postWeekPlan = async (req, res) => {
       return res.status(result.status).json({ status: 'ERROR', message: result.message });
     }
 
-    const meta = result.meta || {};
+    let meta = result.meta || {};
+    let plan = result.plan;
     let message = 'Weekly meal plan generated';
     if (meta.poolSize === 0) {
       message = body.replace
@@ -113,10 +115,25 @@ exports.postWeekPlan = async (req, res) => {
         : 'No recipe candidates available; meal plan was not changed';
     }
 
+    // If adjustCalories flag is set, run rebalance immediately
+    if (body.adjustCalories === true) {
+      try {
+        const rebalanceResult = await rebalanceWeekPlanForCalories(user_id, body);
+        if (rebalanceResult.ok && rebalanceResult.plan) {
+          plan = rebalanceResult.plan;
+          meta = { ...meta, ...rebalanceResult.meta };
+          message = 'Weekly meal plan generated and calorie-adjusted';
+        }
+      } catch (rebalanceErr) {
+        console.error('postWeekPlan rebalance error:', rebalanceErr);
+        // Continue with non-rebalanced plan
+      }
+    }
+
     return res.status(200).json({
       status: 'OK',
       message,
-      data: { plan: result.plan, meta },
+      data: { plan, meta },
     });
   } catch (err) {
     console.error('postWeekPlan error:', err);
@@ -155,5 +172,39 @@ exports.patchWeekSlot = async (req, res) => {
   } catch (err) {
     console.error('patchWeekSlot error:', err);
     return res.status(500).json({ status: 'ERROR', message: 'Failed to update slot' });
+  }
+};
+
+exports.postWeekRebalance = async (req, res) => {
+  try {
+    const user_id = parseUserId(req);
+    if (!user_id) {
+      return res.status(401).json({ status: 'ERROR', message: 'Unauthorized' });
+    }
+
+    const body = req.body || {};
+    if (body.weekStart == null || body.weekStart === '') {
+      return res.status(400).json({ status: 'ERROR', message: 'weekStart is required in the request body' });
+    }
+
+    const result = await rebalanceWeekPlanForCalories(user_id, body);
+    if (!result.ok) {
+      return res.status(result.status || 500).json({ status: 'ERROR', message: result.message || 'Rebalance failed' });
+    }
+
+    const meta = result.meta || {};
+    let message = 'Meal plan calorie-rebalanced';
+    if (meta.skipped_reason) {
+      message = `Rebalance skipped: ${meta.skipped_reason}`;
+    }
+
+    return res.status(200).json({
+      status: 'OK',
+      message,
+      data: { plan: result.plan, meta },
+    });
+  } catch (err) {
+    console.error('postWeekRebalance error:', err);
+    return res.status(500).json({ status: 'ERROR', message: 'Failed to rebalance meal plan' });
   }
 };
