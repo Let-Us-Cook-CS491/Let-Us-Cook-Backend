@@ -1,5 +1,6 @@
 const personalizedMealService = require('../services/personalizedMealService');
 const { runSuggestFromFridge } = require('../services/fridgeRecipeSuggestService');
+const { browseRecipes: browseRecipesService } = require('../services/recipeFilterService');
 
 function parsePositiveInt(value, fallback, max) {
   const n = Number(value);
@@ -92,6 +93,78 @@ exports.getPersonalizedRecommendations = async (req, res) => {
     return res.status(500).json({
       status: 'ERROR',
       message: 'Failed to generate personalized recommendations',
+    });
+  }
+};
+
+exports.browseRecipes = async (req, res) => {
+  try {
+    const user_id = Number(req.user?.user_id);
+    if (!Number.isInteger(user_id)) {
+      return res.status(401).json({
+        status: 'ERROR',
+        message: 'Unauthorized',
+      });
+    }
+
+    // Parse query parameters
+    const limit = parsePositiveInt(req.query?.limit, 20, 50);
+    const skip = Math.max(Number(req.query?.skip) || 0, 0);
+    const sortBy = req.query?.sortBy;
+    const searchText = req.query?.searchText;
+    const diet = req.query?.diet;
+
+    // Parse excludeIngredients - can be single value or array
+    let excludeIngredients = [];
+    if (req.query?.excludeIngredients) {
+      if (Array.isArray(req.query.excludeIngredients)) {
+        excludeIngredients = req.query.excludeIngredients;
+      } else {
+        excludeIngredients = [req.query.excludeIngredients];
+      }
+    }
+
+    const result = await browseRecipesService(user_id, {
+      limit,
+      skip,
+      sortBy,
+      searchText,
+      diet,
+      excludeIngredients,
+    });
+
+    if (!result.ok) {
+      return res.status(500).json({
+        status: 'ERROR',
+        message: 'Failed to browse recipes',
+      });
+    }
+
+    const meta = result.meta || {};
+    return res.status(200).json({
+      status: 'OK',
+      message: 'Recipes retrieved',
+      data: {
+        recipes: result.recipes,
+        pagination: {
+          total: meta.total,
+          returned: meta.returned,
+          skip: meta.skip,
+          limit: meta.limit,
+          hasMore: meta.hasMore,
+        },
+        filters: {
+          appliedDiet: meta.appliedDiet,
+          excludedIngredients: meta.excludedIngredients,
+          restrictionTerms: meta.restrictionTerms,
+        },
+      },
+    });
+  } catch (err) {
+    console.error('browseRecipes error:', err);
+    return res.status(500).json({
+      status: 'ERROR',
+      message: 'Failed to browse recipes',
     });
   }
 };
