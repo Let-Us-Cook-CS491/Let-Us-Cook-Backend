@@ -5,6 +5,74 @@ const { connectMongo } = require('../config/databaseConnection');
 const { extractReceiptText } = require('../services/receiptOcrService');
 const { parseWithGemini } = require('../services/geminiReceiptParser');
 const crypto = require('crypto');
+const { insertNotification } = require('../services/notificationsInboxService');
+const { NOTIFICATION_PAGES } = require('../constants/notificationPages');
+
+/** Notify fridge members about items expiring within this many days (and already expired). */
+const EXPIRY_NOTIFY_WINDOW_DAYS = 3;
+const EXPIRY_NOTIFY_MAX_ITEMS = 100;
+
+/**
+ * In-app inbox: notify all fridge members about soon-to-expire or expired items (dedup in service).
+ * @param {number} derivedFridgeId
+ */
+async function sendFridgeExpiryNotifications(derivedFridgeId) {
+    const now = new Date();
+    const windowEnd = new Date(
+        now.getTime() + EXPIRY_NOTIFY_WINDOW_DAYS * 24 * 60 * 60 * 1000
+    );
+    const expiringDocs = await FridgeItem.find(
+        {
+            fridge_id: derivedFridgeId,
+            expiration_date: { $lte: windowEnd },
+        },
+        { name: 1, expiration_date: 1 }
+    )
+        .limit(EXPIRY_NOTIFY_MAX_ITEMS)
+        .lean();
+
+    const [recipientRows] = await db.execute(
+        `SELECT user_id FROM users WHERE fridge_id = ?`,
+        [derivedFridgeId]
+    );
+    const recipientIds = recipientRows
+        .map((r) => Number(r.user_id))
+        .filter((id) => Number.isInteger(id) && id > 0);
+
+    const MS_PER_DAY = 24 * 60 * 60 * 1000;
+    const startOfUtcDay = (d) =>
+        Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+
+    for (const doc of expiringDocs) {
+        const exp = doc.expiration_date ? new Date(doc.expiration_date) : null;
+        if (!exp || Number.isNaN(exp.getTime())) continue;
+        const itemTag = `[item:${String(doc._id)}]`;
+        const name = String(doc.name || 'item').trim() || 'item';
+        const daysUntilExpiry = Math.round(
+            (startOfUtcDay(exp) - startOfUtcDay(now)) / MS_PER_DAY
+        );
+        let message;
+        if (daysUntilExpiry < 0) {
+            const daysPast = -daysUntilExpiry;
+            message = `${name} expired ${daysPast} ${daysPast === 1 ? 'day' : 'days'} ago! You should discard or verify before use. ${itemTag}`;
+        } else if (daysUntilExpiry === 0) {
+            message = `${name} expires today! You should use it soon! ${itemTag}`;
+        } else {
+            message = `${name} expires in ${daysUntilExpiry} ${daysUntilExpiry === 1 ? 'day' : 'days'}! You should use it soon! ${itemTag}`;
+        }
+        for (const uid of recipientIds) {
+            try {
+                await insertNotification({
+                    userId: uid,
+                    page: NOTIFICATION_PAGES.FRIDGE,
+                    message,
+                });
+            } catch (insertErr) {
+                console.error('expiry insertNotification error:', insertErr?.message || insertErr);
+            }
+        }
+    }
+}
 
 exports.addItemToFridge = async (req, res) => {
     try {
@@ -383,6 +451,14 @@ exports.getUserFridge = async (req, res) => {
             });
         }
 
+        const derivedFridgeId = Number(userFridge.fridge_id);
+        if (!Number.isInteger(derivedFridgeId) || derivedFridgeId < 1) {
+            return res.status(400).json({
+                status: "ERROR",
+                message: "User does not have a valid fridge",
+            });
+        }
+
         const category = req.query?.category;
         const rawLimit = req.query?.limit;
         const rawSkip = req.query?.skip;
@@ -390,7 +466,7 @@ exports.getUserFridge = async (req, res) => {
 
         const skip = Math.max(Number(rawSkip) || 0, 0);
 
-        const filter = { fridge_id: userFridge.fridge_id };
+        const filter = { fridge_id: derivedFridgeId };
         if (category !== undefined && category !== null && String(category).trim() !== '') {
             filter.category = String(category).trim();
         }
@@ -420,6 +496,12 @@ exports.getUserFridge = async (req, res) => {
             .skip(skip)
             .limit(limit)
             .lean();
+
+        try {
+            await sendFridgeExpiryNotifications(derivedFridgeId);
+        } catch (notifyErr) {
+            console.error('getUserFridge expiry notifications error:', notifyErr);
+        }
 
         return res.status(200).json({
             status: "OK",
