@@ -1,6 +1,9 @@
 const { connectMongo } = require('../config/databaseConnection');
 const Recipie = require('../schemes/recipie');
 const UserPreference = require('../schemes/userPreferences');
+const FridgeItem = require('../schemes/fridgeItem');
+const { resolveFridgeIdForUser } = require('./userFridgeResolver');
+const { normalizeFridgeName } = require('./fridgeInventoryMatching');
 
 // Import helper functions from personalizedMealService
 const {
@@ -63,8 +66,25 @@ async function browseRecipes(userId, options = {}) {
         ? options.excludeIngredients.map((x) => normalizeIngredient(x)).filter(Boolean)
         : [];
 
-    // Load user preferences
-    const preferences = await UserPreference.findOne({ user_id: userId }).lean();
+    // Load user preferences and fridge inventory
+    const [preferences, fridgeResolution] = await Promise.all([
+        UserPreference.findOne({ user_id: userId }).lean(),
+        resolveFridgeIdForUser(userId),
+    ]);
+
+    // Build fridge inventory set
+    let fridgeNameSet = new Set();
+    if (fridgeResolution.status === 'OK') {
+        const fridgeItems = await FridgeItem.find(
+            { fridge_id: fridgeResolution.fridgeId },
+            { name: 1 }
+        ).lean();
+        fridgeNameSet = new Set(
+            fridgeItems
+                .map((item) => normalizeFridgeName(item.name))
+                .filter(Boolean)
+        );
+    }
 
     // Build restriction terms
     let restrictionTerms = [];
@@ -95,16 +115,30 @@ async function browseRecipes(userId, options = {}) {
         .limit(limit)
         .lean();
 
-    // Filter by dietary restrictions
+    // Filter by dietary restrictions and add ingredient matching info
     const filtered = [];
     for (const recipe of recipes) {
         const recipeIngredients = extractRecipeIngredients(recipe);
         if (!violatesRestrictions(recipeIngredients, restrictionTerms)) {
+            // Calculate ingredient matching
+            const matchedIngredients = recipeIngredients.filter((ing) => {
+                const normalized = normalizeFridgeName(ing);
+                return fridgeNameSet.has(normalized);
+            });
+            const missingIngredients = recipeIngredients.filter((ing) => {
+                const normalized = normalizeFridgeName(ing);
+                return !fridgeNameSet.has(normalized);
+            });
+            const matchCount = matchedIngredients.length;
+
             filtered.push({
                 _id: recipe._id,
                 title: recipe.title,
                 image_url: recipe.image_url || recipe.strMealThumb || '',
-                ingredients: recipeIngredients,
+                recipeIngredients,
+                matchedIngredients,
+                missingIngredients,
+                matchCount,
                 nutrition: recipe.nutrition || {},
                 tags: recipe.tags || [],
                 recipe_source: recipe.recipe_source,
