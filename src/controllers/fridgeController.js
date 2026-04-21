@@ -12,6 +12,68 @@ const { NOTIFICATION_PAGES } = require('../constants/notificationPages');
 const EXPIRY_NOTIFY_WINDOW_DAYS = 3;
 const EXPIRY_NOTIFY_MAX_ITEMS = 100;
 
+/**
+ * In-app inbox: notify all fridge members about soon-to-expire or expired items (dedup in service).
+ * @param {number} derivedFridgeId
+ */
+async function sendFridgeExpiryNotifications(derivedFridgeId) {
+    const now = new Date();
+    const windowEnd = new Date(
+        now.getTime() + EXPIRY_NOTIFY_WINDOW_DAYS * 24 * 60 * 60 * 1000
+    );
+    const expiringDocs = await FridgeItem.find(
+        {
+            fridge_id: derivedFridgeId,
+            expiration_date: { $lte: windowEnd },
+        },
+        { name: 1, expiration_date: 1 }
+    )
+        .limit(EXPIRY_NOTIFY_MAX_ITEMS)
+        .lean();
+
+    const [recipientRows] = await db.execute(
+        `SELECT user_id FROM users WHERE fridge_id = ?`,
+        [derivedFridgeId]
+    );
+    const recipientIds = recipientRows
+        .map((r) => Number(r.user_id))
+        .filter((id) => Number.isInteger(id) && id > 0);
+
+    const MS_PER_DAY = 24 * 60 * 60 * 1000;
+    const startOfUtcDay = (d) =>
+        Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+
+    for (const doc of expiringDocs) {
+        const exp = doc.expiration_date ? new Date(doc.expiration_date) : null;
+        if (!exp || Number.isNaN(exp.getTime())) continue;
+        const itemTag = `[item:${String(doc._id)}]`;
+        const name = String(doc.name || 'item').trim() || 'item';
+        const daysUntilExpiry = Math.round(
+            (startOfUtcDay(exp) - startOfUtcDay(now)) / MS_PER_DAY
+        );
+        let message;
+        if (daysUntilExpiry < 0) {
+            const daysPast = -daysUntilExpiry;
+            message = `${name} expired ${daysPast} ${daysPast === 1 ? 'day' : 'days'} ago! You should discard or verify before use. ${itemTag}`;
+        } else if (daysUntilExpiry === 0) {
+            message = `${name} expires today! You should use it soon! ${itemTag}`;
+        } else {
+            message = `${name} expires in ${daysUntilExpiry} ${daysUntilExpiry === 1 ? 'day' : 'days'}! You should use it soon! ${itemTag}`;
+        }
+        for (const uid of recipientIds) {
+            try {
+                await insertNotification({
+                    userId: uid,
+                    page: NOTIFICATION_PAGES.FRIDGE,
+                    message,
+                });
+            } catch (insertErr) {
+                console.error('expiry insertNotification error:', insertErr?.message || insertErr);
+            }
+        }
+    }
+}
+
 exports.addItemToFridge = async (req, res) => {
     try {
         await connectMongo();
@@ -435,52 +497,8 @@ exports.getUserFridge = async (req, res) => {
             .limit(limit)
             .lean();
 
-        // In-app inbox: notify all fridge members about soon-to-expire or expired items (dedup in service).
         try {
-            const now = new Date();
-            const windowEnd = new Date(
-                now.getTime() + EXPIRY_NOTIFY_WINDOW_DAYS * 24 * 60 * 60 * 1000
-            );
-            const expiringDocs = await FridgeItem.find(
-                {
-                    fridge_id: derivedFridgeId,
-                    expiration_date: { $lte: windowEnd },
-                },
-                { name: 1, expiration_date: 1 }
-            )
-                .limit(EXPIRY_NOTIFY_MAX_ITEMS)
-                .lean();
-
-            const [recipientRows] = await db.execute(
-                `SELECT user_id FROM users WHERE fridge_id = ?`,
-                [derivedFridgeId]
-            );
-            const recipientIds = recipientRows
-                .map((r) => Number(r.user_id))
-                .filter((id) => Number.isInteger(id) && id > 0);
-
-            for (const doc of expiringDocs) {
-                const exp = doc.expiration_date ? new Date(doc.expiration_date) : null;
-                if (!exp || Number.isNaN(exp.getTime())) continue;
-                const dateStr = exp.toISOString().slice(0, 10);
-                const itemTag = `[item:${String(doc._id)}]`;
-                const name = String(doc.name || 'item').trim() || 'item';
-                const expired = exp.getTime() < now.getTime();
-                const message = expired
-                    ? `Ingredient "${name}" has expired (expiration ${dateStr}). ${itemTag}`
-                    : `Ingredient "${name}" expires on ${dateStr}. ${itemTag}`;
-                for (const uid of recipientIds) {
-                    try {
-                        await insertNotification({
-                            userId: uid,
-                            page: NOTIFICATION_PAGES.FRIDGE,
-                            message,
-                        });
-                    } catch (insertErr) {
-                        console.error('expiry insertNotification error:', insertErr?.message || insertErr);
-                    }
-                }
-            }
+            await sendFridgeExpiryNotifications(derivedFridgeId);
         } catch (notifyErr) {
             console.error('getUserFridge expiry notifications error:', notifyErr);
         }
