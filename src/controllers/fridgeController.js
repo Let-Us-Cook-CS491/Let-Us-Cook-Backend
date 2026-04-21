@@ -74,6 +74,15 @@ async function sendFridgeExpiryNotifications(derivedFridgeId) {
     }
 }
 
+/** Run expiry notifications after the request handler returns so responses are not delayed. */
+function queueFridgeExpiryNotifications(derivedFridgeId) {
+    setImmediate(() => {
+        sendFridgeExpiryNotifications(derivedFridgeId).catch((err) => {
+            console.error('fridge expiry notifications error:', err);
+        });
+    });
+}
+
 exports.addItemToFridge = async (req, res) => {
     try {
         await connectMongo();
@@ -185,6 +194,8 @@ exports.addItemToFridge = async (req, res) => {
                 setDefaultsOnInsert: true,
             }
         ).lean();
+
+        //queueFridgeExpiryNotifications(derivedFridgeId);
 
         return res.status(200).json({
             status: "OK",
@@ -497,11 +508,7 @@ exports.getUserFridge = async (req, res) => {
             .limit(limit)
             .lean();
 
-        try {
-            await sendFridgeExpiryNotifications(derivedFridgeId);
-        } catch (notifyErr) {
-            console.error('getUserFridge expiry notifications error:', notifyErr);
-        }
+        queueFridgeExpiryNotifications(derivedFridgeId);
 
         return res.status(200).json({
             status: "OK",
