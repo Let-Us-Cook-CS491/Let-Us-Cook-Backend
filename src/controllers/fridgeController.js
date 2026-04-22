@@ -54,11 +54,11 @@ async function sendFridgeExpiryNotifications(derivedFridgeId) {
         let message;
         if (daysUntilExpiry < 0) {
             const daysPast = -daysUntilExpiry;
-            message = `${name} expired ${daysPast} ${daysPast === 1 ? 'day' : 'days'} ago! You should discard or verify before use. ${itemTag}`;
+            message = `${name} expired ${daysPast} ${daysPast === 1 ? 'day' : 'days'} ago! You should discard or verify before use.`;
         } else if (daysUntilExpiry === 0) {
-            message = `${name} expires today! You should use it soon! ${itemTag}`;
+            message = `${name} expires today! You should use it soon!`;
         } else {
-            message = `${name} expires in ${daysUntilExpiry} ${daysUntilExpiry === 1 ? 'day' : 'days'}! You should use it soon! ${itemTag}`;
+            message = `${name} expires in ${daysUntilExpiry} ${daysUntilExpiry === 1 ? 'day' : 'days'}! You should use it soon!`;
         }
         for (const uid of recipientIds) {
             try {

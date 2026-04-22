@@ -13,6 +13,8 @@ const DEFAULT_MAX_INGREDIENTS = 8;
 const MAX_MAX_INGREDIENTS = 12;
 const MIN_LOOKUP_CANDIDATES = 15;
 const MAX_TOTAL_LOOKUPS_STRICT = 50;
+/** Closest-match strict fallback: never return more than this many recipes. */
+const FRIDGE_FALLBACK_MAX_RECIPES = 1;
 
 function parsePositiveInt(value, fallback, max) {
   const n = Number(value);
@@ -262,19 +264,53 @@ async function runSuggestFromFridge(params) {
       return String(a.strMeal || '').localeCompare(String(b.strMeal || ''));
     });
     recipes = strictRecipes;
+
+    // Strict mode found nothing fully covered: suggest closest matches from the same fridge-driven pool.
+    if (!recipes.length && scored.length) {
+      const lookupPoolSize = Math.min(scored.length, Math.max(limit * 2, MIN_LOOKUP_CANDIDATES));
+      const idsToLookup = scored.slice(0, lookupPoolSize).map((s) => s.idMeal);
+      let meals;
+      try {
+        meals = await lookupMealsMongoFirst(idsToLookup);
+      } catch (e) {
+        console.error('Recipe lookup error:', e?.message || e);
+        meals = idsToLookup.map(() => null);
+      }
+      const collected = [];
+      for (let i = 0; i < idsToLookup.length; i += 1) {
+        const idMeal = idsToLookup[i];
+        const meal = meals[i];
+        if (!meal) continue;
+        const matchCount = matchCountById.get(idMeal) || 0;
+        collected.push(buildRecipePayload(meal, matchCount, fridgeNameSet, macroMap));
+      }
+      collected.sort((a, b) => {
+        if (a.missingIngredients.length !== b.missingIngredients.length) {
+          return a.missingIngredients.length - b.missingIngredients.length;
+        }
+        if (b.matchCount !== a.matchCount) return b.matchCount - a.matchCount;
+        return String(a.strMeal || '').localeCompare(String(b.strMeal || ''));
+      });
+      recipes = collected.slice(0, Math.min(limit, FRIDGE_FALLBACK_MAX_RECIPES));
+    }
   }
 
   const limited = recipes.slice(0, limit);
 
-  const message =
-    !allowSubstitutions && limited.length === 0
+  const usedFridgeClosestFallback =
+    !allowSubstitutions && filteredByMissing && limited.length > 0 && limited.some((r) => r.missingIngredients?.length > 0);
+
+  const message = usedFridgeClosestFallback
+    ? 'No fully covered recipes; showing closest matches from your fridge ingredients'
+    : !allowSubstitutions && limited.length === 0
       ? 'No recipes fully covered by your fridge without substitutions'
       : 'Recipe suggestions';
 
   const baseData = {
     recipes: limited,
     allowSubstitutions,
-    filteredByMissing,
+    filteredByMissing: usedFridgeClosestFallback ? false : filteredByMissing,
+    ...(usedFridgeClosestFallback ? { fridgeIngredientFallback: true } : {}),
   };
 
   const data = attachMatchingMeta(baseData, {

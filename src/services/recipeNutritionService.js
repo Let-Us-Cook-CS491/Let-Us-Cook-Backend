@@ -88,15 +88,12 @@ function buildRecipeNutritionFromMeal(meal, macroMap) {
     const strMeasure = rawMeasure == null ? '' : String(rawMeasure).trim();
     const norm = normalizeIngredientName(rawIng);
 
+    if (!strIngredient && !strMeasure) continue;
+
     if (!norm) {
-      ingredientRows.push({
-        index: i,
-        strIngredient,
-        strMeasure,
-        matchedMealdbName: null,
-        values: null,
-        countedInTotals: false,
-      });
+      const row = { index: i, strIngredient, countedInTotals: false };
+      if (strMeasure) row.strMeasure = strMeasure;
+      ingredientRows.push(row);
       continue;
     }
 
@@ -119,14 +116,17 @@ function buildRecipeNutritionFromMeal(meal, macroMap) {
       }
     }
 
-    ingredientRows.push({
+    const row = {
       index: i,
       strIngredient,
-      strMeasure,
-      matchedMealdbName: hasMatch ? norm : null,
-      values: hasMatch ? snapshotNutritionValues(values) : null,
       countedInTotals,
-    });
+    };
+    if (strMeasure) row.strMeasure = strMeasure;
+    if (hasMatch) {
+      row.matchedMealdbName = norm;
+      row.values = snapshotNutritionValues(values);
+    }
+    ingredientRows.push(row);
   }
 
   const totalIngredients = uniqueRecipeIngredients.size;
