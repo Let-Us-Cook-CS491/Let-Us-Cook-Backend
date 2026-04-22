@@ -92,6 +92,33 @@ function buildPrompt({ profile, candidates, limit, includeReasons }) {
     ? '- reason: one concise sentence tying recommendation to user habits/preferences.'
     : '- reason: empty string.';
 
+  const sp = profile?.sessionPreferences || {};
+  const sessionRules = [];
+  if (sp.cuisine) {
+    sessionRules.push(
+      `- Cuisine preference: "${sp.cuisine}". Prefer candidates whose area/category fits; if none fit well, pick the closest culturally compatible option from the list.`
+    );
+  }
+  if (sp.mealType) {
+    sessionRules.push(
+      `- Meal occasion: "${sp.mealType}". Prefer recipes that fit this occasion (name, category, or typical serving context).`
+    );
+  }
+  if (sp.servings != null && Number.isFinite(sp.servings)) {
+    sessionRules.push(
+      `- Servings: about ${sp.servings} people. Prefer recipes that scale reasonably or note batch size in the reason when helpful.`
+    );
+  }
+  if (sp.maxPrepMinutes != null && Number.isFinite(sp.maxPrepMinutes)) {
+    sessionRules.push(
+      `- Time budget: active prep + cooking should fit within about ${sp.maxPrepMinutes} minutes. Use cookMinutesEstimate when present; otherwise infer cautiously and stay under the budget.`
+    );
+  }
+  const sessionBlock =
+    sessionRules.length > 0
+      ? `\nSESSION_REQUEST:\n${sessionRules.join('\n')}\n`
+      : '';
+
   return `
 You are a meal recommendation engine.
 Rank meals for this specific user profile.
@@ -101,12 +128,13 @@ ${JSON.stringify(profile)}
 
 RECIPE_CANDIDATES_JSON:
 ${JSON.stringify(candidates)}
-
+${sessionBlock}
 RULES:
 - Return exactly ${limit} items if possible, otherwise as many valid items as available.
 - Only use idMeal values that exist in RECIPE_CANDIDATES_JSON.
 - Favor meals with fewer missingIngredients and higher matchCount.
 - Respect restrictions/current_diet and avoid contradictory picks.
+- Honor sessionPreferences in USER_PROFILE_JSON when ranking (cuisine, mealType, servings, maxPrepMinutes).
 - personalizationScore is integer 0-100.
 - effort is one of: "easy", "medium", "hard".
 - cookMinutes should be a reasonable integer estimate.

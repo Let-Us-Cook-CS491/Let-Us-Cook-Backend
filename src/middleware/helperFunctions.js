@@ -9,7 +9,7 @@ function isValidTimeZone(tz) {
 }
 
 function isValidWeightUnit(unit) {
-    if (unit !== "g" && unit !== "ml" && unit !== "pcs" && unit !== "kg" && unit !== "L" && unit !== "pack") {
+    if (unit !== "g" && unit !== "ml" && unit !== "pcs" && unit !== "kg" && unit !== "L" && unit !== "pack" && unit !== "oz" && unit !== "lb") {
         return false;
     }
     return true;
