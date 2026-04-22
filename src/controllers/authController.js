@@ -46,7 +46,7 @@ exports.signup = async (req, res) => {
     }
 
     // Validate password length
-    if (password.length < 6) {
+    if (password.length < 8) {
         return res.status(400).json({
             status: "ERROR",
             message: "Password must be at least 6 characters",
@@ -68,7 +68,7 @@ exports.signup = async (req, res) => {
         await connection.beginTransaction();
 
         // Check if user already exists
-        const checkUserQuery = `SELECT * FROM users WHERE email = ?`;
+        const checkUserQuery = `SELECT 1 FROM users WHERE email = ?`;
         const [existingUser] = await connection.execute(checkUserQuery, [email]);
 
         if (existingUser.length > 0) {
@@ -83,9 +83,22 @@ exports.signup = async (req, res) => {
         const saltRounds = process.env.SALT_ROUNDS || 10;
         const hashedPassword = await bcrypt.hash(password, saltRounds);
 
+
+        // Create new Fridge
+        const insertFridgeQuerry = `INSERT INTO fridge () VALUES ()`;
+        const [insertFridgeEventResult] = await connection.execute(insertFridgeQuerry);
+
+        if (insertFridgeEventResult.affectedRows === 0) {
+            await connection.rollback();
+            return res.status(500).json({
+                status: "ERROR",
+                message: "Failed to insert login event",
+            });
+        }
+
         // Insert new user
-        const insertUserQuery = `INSERT INTO users (full_name, email, phone, gender, time_zone) VALUES (?, ?, ?, ?, ?)`;
-        const [insertUserResult] = await connection.execute(insertUserQuery, [full_name, email, phoneNumber, gender, time_zone]);
+        const insertUserQuery = `INSERT INTO users (full_name, email, phone, gender, time_zone, fridge_id) VALUES (?, ?, ?, ?, ?, ?)`;
+        const [insertUserResult] = await connection.execute(insertUserQuery, [full_name, email, phoneNumber, gender, time_zone, insertFridgeEventResult.insertId]);
 
         if (insertUserResult.affectedRows === 0) {
             await connection.rollback();
@@ -120,8 +133,6 @@ exports.signup = async (req, res) => {
             });
         }
 
-        await connection.commit();
-
         // Generate tokens
         const tokens = generateTokens({
             user_id: userId,
@@ -140,7 +151,7 @@ exports.signup = async (req, res) => {
             });
         }
 
-        // Commit transaction
+        // Commit transaction (single commit for entire signup)
         await connection.commit();
 
         res.status(201).json({
@@ -149,6 +160,7 @@ exports.signup = async (req, res) => {
             data: {
                 user_id: userId,
                 email: email,
+                fridge_id: insertFridgeEventResult.insertId,
                 accessToken: tokens.accessToken,
                 refreshToken: tokens.refreshToken,
             },
@@ -200,7 +212,7 @@ exports.login = async (req, res) => {
         connection = await db.getConnection();
 
         // Find user by email
-        const findUserQuery = `SELECT user_id, email FROM users WHERE email = ?`;
+        const findUserQuery = `SELECT user_id, email, fridge_id FROM users WHERE email = ?`;
         const [userResult] = await connection.execute(findUserQuery, [email]);
 
         if (userResult.length === 0) {
@@ -255,14 +267,11 @@ exports.login = async (req, res) => {
         const [updateUserRefreshTokenResult] = await connection.execute(updateUserRefreshTokenQuery, [tokens.refreshToken, user.user_id]);
 
         if (updateUserRefreshTokenResult.affectedRows === 0) {
-            await connection.rollback();
             return res.status(500).json({
                 status: "ERROR",
                 message: "Failed to update user refresh token",
             });
         }
-
-        await connection.commit();
 
         res.status(200).json({
             status: "OK",
@@ -270,6 +279,7 @@ exports.login = async (req, res) => {
             data: {
                 user_id: user.user_id,
                 email: user.email,
+                fridge_id: user.fridge_id,
                 accessToken: tokens.accessToken,
                 refreshToken: tokens.refreshToken,
             },
@@ -356,11 +366,10 @@ exports.refreshToken = async (req, res) => {
         });
     }
 
-    let connection; 
+    let connection;
 
     try {
         connection = await db.getConnection();
-        await connection.beginTransaction();
 
         // Verify the refresh token
         const decoded = verifyRefreshToken(refreshToken);
@@ -377,7 +386,6 @@ exports.refreshToken = async (req, res) => {
         const [validRefreshTokenResult] = await connection.execute(validRefreshTokenQuery, [user_id]);
 
         if (validRefreshTokenResult.length === 0) {
-            await connection.rollback();
             return res.status(401).json({
                 status: "ERROR",
                 message: "No refresh token found for this user",
@@ -385,7 +393,6 @@ exports.refreshToken = async (req, res) => {
         }
 
         if (validRefreshTokenResult[0].refresh_token !== refreshToken) {
-            await connection.rollback();
             return res.status(401).json({
                 status: "ERROR",
                 message: "Invalid or Expired refresh token",
@@ -415,5 +422,7 @@ exports.refreshToken = async (req, res) => {
             message: "Invalid refresh token",
             error: error.message,
         });
+    } finally {
+        if (connection) await connection.release();
     }
 }
