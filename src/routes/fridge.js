@@ -12,6 +12,7 @@ const {
   removeItemFromFridge,
   createFridgeInvite,
   joinFridgeByInvite,
+  getDashboardData,
 } = require('../controllers/fridgeController');
 
 
@@ -23,5 +24,7 @@ router.patch('/update-item', apiLimiter, verifyToken, updateItemInFridge);
 router.get('/get-item', apiLimiter, verifyToken, getUserFridge);
 router.post('/:fridgeId/invite', apiLimiter, verifyToken, createFridgeInvite);
 router.post('/join', apiLimiter, verifyToken, joinFridgeByInvite);
+router.get('/dashboard', apiLimiter, verifyToken, getDashboardData);
+
 
 module.exports = router;

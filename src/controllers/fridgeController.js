@@ -927,3 +927,52 @@ exports.joinFridgeByInvite = async (req, res) => {
 
 
 
+exports.getDashboardData = async (req, res) => {
+    let connection;
+    try {
+        const user_id = Number(req.user?.user_id);
+
+        if (!Number.isInteger(user_id)) {
+            return res.status(401).json({
+                status: "ERROR",
+                message: "Unauthorized",
+            });
+        }
+
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+
+        const getDashboardDataQuery = `SELECT items_in_stock, expiring_soon, planned_meals, waste_prevented, meals_cooked FROM user_metrics WHERE user_id = ?;`;
+        const [getDashboardDataResult] = await connection.execute(getDashboardDataQuery, [user_id]);
+        if (getDashboardDataResult.length === 0) {
+            await connection.rollback();
+            return res.status(404).json({
+                status: "ERROR",
+                message: "User not found",
+            });
+        }
+
+        await connection.commit();
+
+        return res.status(201).json({
+            status: "OK",
+            message: "Invite created",
+            data: {
+                items_in_stock: getDashboardDataResult[0].items_in_stock,
+                expiring_soon: getDashboardDataResult[0].expiring_soon,
+                planned_meals: getDashboardDataResult[0].planned_meals,
+                waste_prevented: getDashboardDataResult[0].waste_prevented,
+                meals_cooked: getDashboardDataResult[0].meals_cooked,
+            },
+        });
+    } catch (err) {
+        if (connection) await connection.rollback();
+        console.error('createFridgeInvite error:', err);
+        return res.status(500).json({
+            status: "ERROR",
+            message: "Failed to create fridge invite",
+        });
+    } finally {
+        if (connection) await connection.release();
+    }
+};

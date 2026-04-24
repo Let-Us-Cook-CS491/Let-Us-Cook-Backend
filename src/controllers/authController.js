@@ -133,6 +133,17 @@ exports.signup = async (req, res) => {
             });
         }
 
+        const insertUserMetricsQuery = `INSERT INTO user_metrics (user_id) VALUES (?)`;
+        const [insertUserMetricsResult] = await connection.execute(insertUserMetricsQuery, [userId]);
+
+        if (insertUserMetricsResult.affectedRows === 0) {
+            await connection.rollback();
+            return res.status(500).json({
+                status: "ERROR",
+                message: "Failed to insert user_metrics",
+            });
+        }
+
         // Generate tokens
         const tokens = generateTokens({
             user_id: userId,
