@@ -519,7 +519,7 @@ async function deleteItemFromList(userId, listId, itemId) {
         };
     }
 
-    item.remove();
+    list.items.pull({ _id: item._id });
     await list.save();
 
     return {
