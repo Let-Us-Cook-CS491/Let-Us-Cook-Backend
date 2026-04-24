@@ -285,10 +285,11 @@ exports.login = async (req, res) => {
         }
 
         const insertLoginEventQuery = `INSERT INTO logins (user_id) VALUES (?)`;
-        const [insertLoginEventResult] = await connection.execute(insertLoginEventQuery, [userId]);
+        const [insertLoginEventResult] = await connection.execute(insertLoginEventQuery, [
+            user.user_id,
+        ]);
 
         if (insertLoginEventResult.affectedRows === 0) {
-            await connection.rollback();
             return res.status(500).json({
                 status: "ERROR",
                 message: "Failed to insert login event",
