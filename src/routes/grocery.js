@@ -7,6 +7,7 @@ const {
     getGroceryLists,
     getGroceryList,
     addItemsToList,
+    addMissingIngredientsToList,
     updateItemPurchaseStatus,
     bulkUpdatePurchaseStatus,
     addItemToFridge,
@@ -24,6 +25,7 @@ router.patch('/lists/:listId/archive', verifyToken, apiLimiter, archiveGroceryLi
 
 // Item management
 router.post('/lists/:listId/items', verifyToken, apiLimiter, addItemsToList);
+router.post('/lists/:listId/missing-ingredients', verifyToken, apiLimiter, addMissingIngredientsToList);
 router.delete('/lists/:listId/items/:itemId', verifyToken, apiLimiter, deleteItemFromList);
 router.patch('/lists/:listId/items/:itemId/purchase', verifyToken, apiLimiter, updateItemPurchaseStatus);
 router.patch('/lists/:listId/items/purchase-batch', verifyToken, apiLimiter, bulkUpdatePurchaseStatus);

@@ -175,6 +175,30 @@ exports.patchWeekSlot = async (req, res) => {
   }
 };
 
+exports.postWeekSlotFromRecipe = async (req, res) => {
+  try {
+    const user_id = parseUserId(req);
+    if (!user_id) {
+      return res.status(401).json({ status: 'ERROR', message: 'Unauthorized' });
+    }
+
+    const body = req.body || {};
+    const result = await weeklyMealPlanService.addSelectedRecipeToSlot(user_id, body);
+    if (!result.ok) {
+      return res.status(result.status).json({ status: 'ERROR', message: result.message });
+    }
+
+    return res.status(200).json({
+      status: 'OK',
+      message: 'Recipe added to meal plan slot',
+      data: { plan: result.plan },
+    });
+  } catch (err) {
+    console.error('postWeekSlotFromRecipe error:', err);
+    return res.status(500).json({ status: 'ERROR', message: 'Failed to add recipe to slot' });
+  }
+};
+
 exports.postWeekRebalance = async (req, res) => {
   try {
     const user_id = parseUserId(req);
