@@ -6,10 +6,12 @@ const {
   suggestRecipesFromFridge,
   getPersonalizedRecommendations,
   browseRecipes,
+  markAsCooked,
 } = require('../controllers/recipeSuggestController');
 
 router.get('/suggest', verifyToken, apiLimiter, suggestRecipesFromFridge);
 router.get('/personalized', verifyToken, apiLimiter, getPersonalizedRecommendations);
 router.get('/browse', verifyToken, apiLimiter, browseRecipes);
+router.post(`/mark-as-cooked`, verifyToken, apiLimiter, markAsCooked);
 
 module.exports = router;

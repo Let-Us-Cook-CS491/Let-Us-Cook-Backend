@@ -2,6 +2,7 @@ const personalizedMealService = require('../services/personalizedMealService');
 const { runSuggestFromFridge } = require('../services/fridgeRecipeSuggestService');
 const { browseRecipes: browseRecipesService } = require('../services/recipeFilterService');
 const { compactForJson } = require('../utils/compactForJson');
+const db = require('../config/databaseConnection');
 
 function parsePositiveInt(value, fallback, max) {
   const n = Number(value);
@@ -236,6 +237,42 @@ exports.browseRecipes = async (req, res) => {
     return res.status(500).json({
       status: 'ERROR',
       message: 'Failed to browse recipes',
+    });
+  }
+};
+
+exports.markAsCooked = async (req, res) => {
+  try {
+    const user_id = Number(req.user?.user_id);
+    const recipe_id = Number(req.body?.recipe_id);
+
+    if (!Number.isInteger(user_id)) {
+      return res.status(401).json({
+        status: 'ERROR',
+        message: 'Unauthorized',
+      });
+    }
+
+    const UpdateRecipeCookedQuery = `UPDATE user_metrics SET meals_cooked = meals_cooked + 1 WHERE user_id = ?`;
+    const [updateRecipeCookedResult] = await db.execute(UpdateRecipeCookedQuery, [user_id]);
+
+    if (updateRecipeCookedResult.affectedRows === 0) {
+      return res.status(404).json({
+        status: 'ERROR',
+        message: 'Recipe not found',
+      });
+    }
+
+    return res.status(200).json({
+      status: 'OK',
+      message: 'Recipe marked as cooked',
+    });
+  }
+  catch (err) {
+    console.error('markAsCooked error:', err);
+    return res.status(500).json({
+      status: 'ERROR',
+      message: 'Failed to mark recipe as cooked',
     });
   }
 };

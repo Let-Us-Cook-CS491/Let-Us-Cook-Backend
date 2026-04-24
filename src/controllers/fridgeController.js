@@ -8,14 +8,9 @@ const crypto = require('crypto');
 const { insertNotification } = require('../services/notificationsInboxService');
 const { NOTIFICATION_PAGES } = require('../constants/notificationPages');
 
-/** Notify fridge members about items expiring within this many days (and already expired). */
 const EXPIRY_NOTIFY_WINDOW_DAYS = 3;
 const EXPIRY_NOTIFY_MAX_ITEMS = 100;
 
-/**
- * In-app inbox: notify all fridge members about soon-to-expire or expired items (dedup in service).
- * @param {number} derivedFridgeId
- */
 async function sendFridgeExpiryNotifications(derivedFridgeId) {
     const now = new Date();
     const windowEnd = new Date(
@@ -74,13 +69,154 @@ async function sendFridgeExpiryNotifications(derivedFridgeId) {
     }
 }
 
-/** Run expiry notifications after the request handler returns so responses are not delayed. */
+
 function queueFridgeExpiryNotifications(derivedFridgeId) {
     setImmediate(() => {
         sendFridgeExpiryNotifications(derivedFridgeId).catch((err) => {
             console.error('fridge expiry notifications error:', err);
         });
     });
+}
+
+
+function isExpirationInExpiringSoonWindow(expiration, refDate = new Date()) {
+    const t = new Date(expiration);
+    if (Number.isNaN(t.getTime())) {
+        return false;
+    }
+    const start = refDate.getTime();
+    const end = start + EXPIRY_NOTIFY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    return t.getTime() > start && t.getTime() <= end;
+}
+
+
+async function adjustUserWastePreventedBy(userId, delta) {
+    const uid = Number(userId);
+    const d = Number(delta);
+    if (!Number.isInteger(uid) || uid < 1 || !Number.isFinite(d) || d <= 0) {
+        return;
+    }
+    try {
+        await db.execute(
+            `UPDATE user_metrics SET waste_prevented = GREATEST(0, waste_prevented + ?) WHERE user_id = ?`,
+            [d, uid]
+        );
+    } catch (e) {
+        console.error('adjustUserWastePreventedBy error:', e);
+    }
+}
+
+async function maybeAddWastePreventedForAtRiskUse(userId, lineDoc, quantityUsed) {
+    if (!lineDoc) return;
+    const q = Number(quantityUsed);
+    if (!Number.isFinite(q) || q <= 0) return;
+    if (!isExpirationInExpiringSoonWindow(lineDoc.expiration_date)) {
+        return;
+    }
+    await adjustUserWastePreventedBy(userId, q);
+}
+
+
+async function adjustUserItemsInStockBy(userId, delta) {
+    const uid = Number(userId);
+    const d = Number(delta);
+    if (!Number.isInteger(uid) || uid < 1 || !Number.isFinite(d) || d === 0) {
+        return;
+    }
+    try {
+        await db.execute(
+            `UPDATE user_metrics SET items_in_stock = GREATEST(0, items_in_stock + ?) WHERE user_id = ?`,
+            [d, uid]
+        );
+    } catch (e) {
+        console.error('adjustUserItemsInStockBy error:', e);
+    }
+}
+
+
+async function reconcileUserMetricsItemsInStockFromFridge(userId, fridgeId) {
+    const uid = Number(userId);
+    const fid = Number(fridgeId);
+    if (!Number.isInteger(uid) || uid < 1 || !Number.isInteger(fid) || fid < 1) {
+        return;
+    }
+
+    try {
+        await connectMongo();
+        const now = new Date();
+        const windowEnd = new Date(
+            now.getTime() + EXPIRY_NOTIFY_WINDOW_DAYS * 24 * 60 * 60 * 1000
+        );
+
+        const [stockAgg, expAgg] = await Promise.all([
+            FridgeItem.aggregate([
+                { $match: { fridge_id: fid } },
+                { $group: { _id: null, total: { $sum: '$quantity' } } },
+            ]),
+            FridgeItem.aggregate([
+                {
+                    $match: {
+                        fridge_id: fid,
+                        expiration_date: { $gt: now, $lte: windowEnd },
+                    },
+                },
+                { $group: { _id: null, expiring: { $sum: '$quantity' } } },
+            ]),
+        ]);
+        const rawTotal = stockAgg[0] && Object.prototype.hasOwnProperty.call(stockAgg[0], 'total')
+            ? Number(stockAgg[0].total)
+            : 0;
+        const computedStock = Number.isFinite(rawTotal) ? Math.max(0, rawTotal) : 0;
+        const rawExp = expAgg[0] && Object.prototype.hasOwnProperty.call(expAgg[0], 'expiring')
+            ? Number(expAgg[0].expiring)
+            : 0;
+        const expiringSoon = Number.isFinite(rawExp) ? Math.max(0, rawExp) : 0;
+
+        const [metricRows] = await db.execute(
+            `SELECT items_in_stock, expiring_soon FROM user_metrics WHERE user_id = ? LIMIT 1`,
+            [uid]
+        );
+        if (metricRows.length === 0) {
+            console.warn(
+                `reconcileUserMetrics: no user_metrics row for user_id=${uid}`
+            );
+            return;
+        }
+        const previousStock = Number(metricRows[0].items_in_stock);
+        const previousExp = Number(metricRows[0].expiring_soon);
+        if (previousStock !== computedStock || previousExp !== expiringSoon) {
+            console.warn(
+                `reconcileUserMetrics: user_id=${uid} sync items_in_stock ${previousStock}→${computedStock}, ` +
+                `expiring_soon ${previousExp}→${expiringSoon} (fridge_id=${fid})`
+            );
+        }
+
+        await db.execute(
+            `UPDATE user_metrics SET items_in_stock = ?, expiring_soon = ? WHERE user_id = ?`,
+            [computedStock, expiringSoon, uid]
+        );
+    } catch (e) {
+        console.error('reconcileUserMetricsItemsInStockFromFridge error:', e);
+    }
+}
+
+/**
+ * Run reconciliation off the request path: wait until the response is fully sent, then
+ * one more tick before touching Mongo/MySQL, so the GET never waits on I/O.
+ */
+function queueReconcileUserMetricsItemsInStockFromFridge(res, userId, fridgeId) {
+    const run = () => {
+        setImmediate(() => {
+            reconcileUserMetricsItemsInStockFromFridge(userId, fridgeId).catch((err) => {
+                console.error('reconcileUserMetricsItemsInStockFromFridge (async) error:', err);
+            });
+        });
+    };
+    if (res && typeof res.once === 'function' && res.writableEnded !== true) {
+        res.once('finish', run);
+    } else {
+        setImmediate(run);
+    }
 }
 
 exports.addItemToFridge = async (req, res) => {
@@ -167,11 +303,12 @@ exports.addItemToFridge = async (req, res) => {
         }
 
         const filter = { fridge_id: derivedFridgeId, name: normalizedName, category, unit };
+        const addQty = Number(quantity);
 
         const existingItem = await FridgeItem.findOne(filter, { expiration_date: 1 }).lean();
 
         const update = {
-            $inc: { quantity: Number(quantity) },
+            $inc: { quantity: addQty },
         };
 
         // Only move expiration earlier (closer to expiring); never push it later.
@@ -194,6 +331,8 @@ exports.addItemToFridge = async (req, res) => {
                 setDefaultsOnInsert: true,
             }
         ).lean();
+
+        await adjustUserItemsInStockBy(user_id, addQty);
 
         //queueFridgeExpiryNotifications(derivedFridgeId);
 
@@ -267,9 +406,13 @@ exports.removeItemFromFridge = async (req, res) => {
             });
         }
 
-        const newQuantity = Number(existing.quantity) - removeCount;
+        const prevQty = Number(existing.quantity);
+        const actualRemoved = Math.min(removeCount, prevQty);
+        const newQuantity = prevQty - removeCount;
         if (newQuantity <= 0) {
             await FridgeItem.deleteOne({ fridge_id: derivedFridgeId, _id: item_id });
+            await adjustUserItemsInStockBy(user_id, -actualRemoved);
+            await maybeAddWastePreventedForAtRiskUse(user_id, existing, actualRemoved);
             return res.status(200).json({
                 status: "OK",
                 message: "Item removed from fridge",
@@ -281,6 +424,9 @@ exports.removeItemFromFridge = async (req, res) => {
             { $set: { quantity: newQuantity } },
             { returnDocument: 'after' }
         ).lean();
+
+        await adjustUserItemsInStockBy(user_id, -actualRemoved);
+        await maybeAddWastePreventedForAtRiskUse(user_id, existing, actualRemoved);
 
         return res.status(200).json({
             status: "OK",
@@ -405,6 +551,43 @@ exports.updateItemInFridge = async (req, res) => {
             });
         }
 
+        let beforeForQuantity = null;
+        if (Object.prototype.hasOwnProperty.call(updateFields, 'quantity')) {
+            beforeForQuantity = await FridgeItem.findOne({
+                fridge_id: derivedFridgeId,
+                _id: item_id,
+            }).lean();
+            if (!beforeForQuantity) {
+                return res.status(404).json({
+                    status: "ERROR",
+                    message: "Item not found",
+                });
+            }
+            const newQ = Number(updateFields.quantity);
+            if (newQ === 0) {
+                const del = await FridgeItem.deleteOne({
+                    fridge_id: derivedFridgeId,
+                    _id: item_id,
+                });
+                if (del.deletedCount === 0) {
+                    return res.status(404).json({
+                        status: "ERROR",
+                        message: "Item not found",
+                    });
+                }
+                await adjustUserItemsInStockBy(user_id, -Number(beforeForQuantity.quantity));
+                await maybeAddWastePreventedForAtRiskUse(
+                    user_id,
+                    beforeForQuantity,
+                    Number(beforeForQuantity.quantity)
+                );
+                return res.status(200).json({
+                    status: "OK",
+                    message: "Item removed from fridge",
+                });
+            }
+        }
+
         const updatedFridgeItem = await FridgeItem.findOneAndUpdate(
             { fridge_id: derivedFridgeId, _id: item_id },
             { $set: updateFields },
@@ -416,6 +599,20 @@ exports.updateItemInFridge = async (req, res) => {
                 status: "ERROR",
                 message: "Item not found",
             });
+        }
+
+        if (beforeForQuantity) {
+            const delta = Number(updateFields.quantity) - Number(beforeForQuantity.quantity);
+            if (delta !== 0) {
+                await adjustUserItemsInStockBy(user_id, delta);
+            }
+            if (delta < 0) {
+                await maybeAddWastePreventedForAtRiskUse(
+                    user_id,
+                    beforeForQuantity,
+                    -delta
+                );
+            }
         }
 
         return res.status(200).json({
@@ -509,6 +706,7 @@ exports.getUserFridge = async (req, res) => {
             .lean();
 
         queueFridgeExpiryNotifications(derivedFridgeId);
+        queueReconcileUserMetricsItemsInStockFromFridge(res, user_id, derivedFridgeId);
 
         return res.status(200).json({
             status: "OK",
@@ -681,6 +879,8 @@ exports.confirmReceiptItems = async (req, res) => {
                 returnDocument: 'after',
                 setDefaultsOnInsert: true,
             });
+
+            await adjustUserItemsInStockBy(user_id, incBy);
 
             upsertedItems.push(upserted);
         }
@@ -927,3 +1127,52 @@ exports.joinFridgeByInvite = async (req, res) => {
 
 
 
+exports.getDashboardData = async (req, res) => {
+    let connection;
+    try {
+        const user_id = Number(req.user?.user_id);
+
+        if (!Number.isInteger(user_id)) {
+            return res.status(401).json({
+                status: "ERROR",
+                message: "Unauthorized",
+            });
+        }
+
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+
+        const getDashboardDataQuery = `SELECT items_in_stock, expiring_soon, planned_meals, waste_prevented, meals_cooked FROM user_metrics WHERE user_id = ?;`;
+        const [getDashboardDataResult] = await connection.execute(getDashboardDataQuery, [user_id]);
+        if (getDashboardDataResult.length === 0) {
+            await connection.rollback();
+            return res.status(404).json({
+                status: "ERROR",
+                message: "User not found",
+            });
+        }
+
+        await connection.commit();
+
+        return res.status(201).json({
+            status: "OK",
+            message: "Invite created",
+            data: {
+                items_in_stock: getDashboardDataResult[0].items_in_stock,
+                expiring_soon: getDashboardDataResult[0].expiring_soon,
+                planned_meals: getDashboardDataResult[0].planned_meals,
+                waste_prevented: getDashboardDataResult[0].waste_prevented,
+                meals_cooked: getDashboardDataResult[0].meals_cooked,
+            },
+        });
+    } catch (err) {
+        if (connection) await connection.rollback();
+        console.error('createFridgeInvite error:', err);
+        return res.status(500).json({
+            status: "ERROR",
+            message: "Failed to create fridge invite",
+        });
+    } finally {
+        if (connection) await connection.release();
+    }
+};
