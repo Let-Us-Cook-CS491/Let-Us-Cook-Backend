@@ -1142,6 +1142,25 @@ exports.getDashboardData = async (req, res) => {
         connection = await db.getConnection();
         await connection.beginTransaction();
 
+        const getFridgeQuery = `SELECT fridge_id FROM users WHERE user_id = ? LIMIT 1`;
+        const [fridgeRows] = await connection.execute(getFridgeQuery, [user_id]);
+        if (fridgeRows.length === 0) {
+            await connection.rollback();
+            return res.status(404).json({
+                status: "ERROR",
+                message: "User not found",
+            });
+        }
+
+        const derivedFridgeId = Number(fridgeRows[0].fridge_id);
+        if (!Number.isInteger(derivedFridgeId) || derivedFridgeId < 1) {
+            await connection.rollback();
+            return res.status(400).json({
+                status: "ERROR",
+                message: "User does not have a valid fridge",
+            });
+        }
+
         const getDashboardDataQuery = `SELECT items_in_stock, expiring_soon, planned_meals, waste_prevented, meals_cooked FROM user_metrics WHERE user_id = ?;`;
         const [getDashboardDataResult] = await connection.execute(getDashboardDataQuery, [user_id]);
         if (getDashboardDataResult.length === 0) {
@@ -1154,23 +1173,39 @@ exports.getDashboardData = async (req, res) => {
 
         await connection.commit();
 
-        return res.status(201).json({
+        await connectMongo();
+        const now = new Date();
+        const windowEnd = new Date(
+            now.getTime() + EXPIRY_NOTIFY_WINDOW_DAYS * 24 * 60 * 60 * 1000
+        );
+        const expiring_items = await FridgeItem.find(
+            {
+                fridge_id: derivedFridgeId,
+                expiration_date: { $gt: now, $lte: windowEnd },
+            },
+            { __v: 0 }
+        )
+            .sort({ expiration_date: 1, name: 1 })
+            .lean();
+
+        return res.status(200).json({
             status: "OK",
-            message: "Invite created",
+            message: "Dashboard data fetched",
             data: {
                 items_in_stock: getDashboardDataResult[0].items_in_stock,
                 expiring_soon: getDashboardDataResult[0].expiring_soon,
                 planned_meals: getDashboardDataResult[0].planned_meals,
                 waste_prevented: getDashboardDataResult[0].waste_prevented,
                 meals_cooked: getDashboardDataResult[0].meals_cooked,
+                expiring_items,
             },
         });
     } catch (err) {
         if (connection) await connection.rollback();
-        console.error('createFridgeInvite error:', err);
+        console.error('getDashboardData error:', err);
         return res.status(500).json({
             status: "ERROR",
-            message: "Failed to create fridge invite",
+            message: "Failed to fetch dashboard data",
         });
     } finally {
         if (connection) await connection.release();
