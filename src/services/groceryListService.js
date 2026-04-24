@@ -265,6 +265,40 @@ async function addItemsToList(userId, listId, items) {
 }
 
 /**
+ * Add missing recipe ingredients to an existing list
+ */
+async function addMissingIngredientsToList(userId, listId, payload) {
+    const sourceSurface = String(payload?.sourceSurface || '').trim();
+    const recipeId = String(payload?.recipeId || '').trim();
+    const recipeTitle = payload?.recipeTitle ? String(payload.recipeTitle).trim() : undefined;
+    const mode = String(payload?.mode || '').trim();
+    const ingredients = Array.isArray(payload?.ingredients) ? payload.ingredients : [];
+
+    const mappedItems = ingredients.map((ingredientName) => ({
+        name: String(ingredientName || '').trim(),
+        source: 'recipe',
+        source_id: recipeId,
+    })).filter((item) => item.name);
+
+    const addResult = await addItemsToList(userId, listId, mappedItems);
+    if (!addResult.ok) {
+        return addResult;
+    }
+
+    return {
+        ok: true,
+        list: addResult.list,
+        added_count: mappedItems.length,
+        source_surface: sourceSurface,
+        mode,
+        recipe: {
+            id: recipeId,
+            title: recipeTitle,
+        },
+    };
+}
+
+/**
  * Mark item as purchased/unpurchased
  */
 async function updateItemPurchaseStatus(userId, listId, itemId, purchased) {
@@ -485,7 +519,7 @@ async function deleteItemFromList(userId, listId, itemId) {
         };
     }
 
-    item.remove();
+    list.items.pull({ _id: item._id });
     await list.save();
 
     return {
@@ -552,6 +586,7 @@ module.exports = {
     getGroceryLists,
     getGroceryList,
     addItemsToList,
+    addMissingIngredientsToList,
     updateItemPurchaseStatus,
     bulkUpdatePurchaseStatus,
     addItemToFridge,

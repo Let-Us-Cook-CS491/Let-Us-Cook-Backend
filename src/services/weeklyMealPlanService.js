@@ -12,16 +12,16 @@ function addUtcDays(date, days) {
   return d;
 }
 
-/** Monday 00:00:00.000 UTC of the ISO week containing `input`. */
+/** Sunday 00:00:00.000 UTC of the week containing `input`. */
 function startOfUtcWeekMonday(input) {
   const d = input instanceof Date ? new Date(input.getTime()) : new Date(String(input));
   if (Number.isNaN(d.getTime())) {
     return null;
   }
   const day = d.getUTCDay();
-  const delta = day === 0 ? -6 : 1 - day;
-  const monday = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + delta, 0, 0, 0, 0));
-  return monday;
+  const delta = -day;
+  const sunday = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + delta, 0, 0, 0, 0));
+  return sunday;
 }
 
 function utcDateKey(d) {
@@ -30,6 +30,14 @@ function utcDateKey(d) {
   const m = String(x.getUTCMonth() + 1).padStart(2, '0');
   const day = String(x.getUTCDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+function normalizeSlotName(slot) {
+  const value = String(slot || '').trim().toLowerCase();
+  if (value === 'breakfast') return 'breakfast';
+  if (value === 'lunch') return 'lunch';
+  if (value === 'dinner') return 'dinner';
+  return null;
 }
 
 function emptySlots() {
@@ -43,6 +51,31 @@ function buildWeekDays(weekStartMonday) {
     days.push({ date, slots: emptySlots() });
   }
   return days;
+}
+
+function normalizeWeekDays(weekStart, days) {
+  const normalized = buildWeekDays(weekStart);
+  const existingByDate = new Map();
+  if (Array.isArray(days)) {
+    for (const day of days) {
+      if (!day?.date) continue;
+      existingByDate.set(utcDateKey(day.date), day);
+    }
+  }
+
+  for (const normalizedDay of normalized) {
+    const key = utcDateKey(normalizedDay.date);
+    const existing = existingByDate.get(key);
+    if (existing?.slots && typeof existing.slots === 'object') {
+      normalizedDay.slots = {
+        breakfast: existing.slots.breakfast ?? null,
+        lunch: existing.slots.lunch ?? null,
+        dinner: existing.slots.dinner ?? null,
+      };
+    }
+  }
+
+  return normalized;
 }
 
 function shuffleInPlace(arr) {
@@ -103,6 +136,31 @@ function buildSlotFromMealdb(recipe) {
     prep_minutes: Number(cook) || 30,
     nutrition_snapshot: nutritionFromMealdbRecipe(recipe),
     assigned_at,
+  };
+}
+
+function buildSlotFromSelectedRecipe(recipe) {
+  const source = String(recipe?.source || '').trim().toLowerCase();
+  if (source === 'mongo') {
+    return {
+      source: 'mongo',
+      recipe_id: recipe.recipe_id || recipe._id,
+      title: String(recipe.title || recipe.strMeal || 'Recipe'),
+      image_url: String(recipe.image_url || recipe.strMealThumb || ''),
+      prep_minutes: Number(recipe.prep_minutes ?? recipe.prepMinutes ?? recipe.cookMinutesEstimate ?? recipe?.personalization?.cookMinutes ?? 30) || 30,
+      nutrition_snapshot: nutritionFromMongoDoc(recipe) || nutritionFromMealdbRecipe(recipe),
+      assigned_at: new Date(),
+    };
+  }
+
+  return {
+    source: 'mealdb',
+    idMeal: String(recipe.idMeal || recipe.recipeId || ''),
+    title: String(recipe.strMeal || recipe.title || 'Recipe'),
+    image_url: String(recipe.strMealThumb || recipe.image_url || ''),
+    prep_minutes: Number(recipe.cookMinutesEstimate ?? recipe?.personalization?.cookMinutes ?? recipe.prep_minutes ?? 30) || 30,
+    nutrition_snapshot: nutritionFromMealdbRecipe(recipe) || nutritionFromMongoDoc(recipe),
+    assigned_at: new Date(),
   };
 }
 
@@ -242,6 +300,18 @@ async function getWeekPlan(userId, weekStartInput, { createIfMissing = true } = 
     return { ok: false, status: 404, message: 'Meal plan not found for this week' };
   }
 
+  const normalizedDays = normalizeWeekDays(weekStartMonday, doc.days);
+  const shouldNormalize =
+    !Array.isArray(doc.days)
+    || doc.days.length !== 7
+    || utcDateKey(doc.days[0]?.date) !== utcDateKey(weekStartMonday)
+    || utcDateKey(doc.days[6]?.date) !== utcDateKey(addUtcDays(weekStartMonday, 6));
+
+  if (shouldNormalize) {
+    doc.days = normalizedDays;
+    await doc.save();
+  }
+
   return { ok: true, plan: doc.toObject ? doc.toObject() : doc };
 }
 
@@ -309,6 +379,8 @@ async function generateWeekPlan(userId, body) {
     });
   }
 
+  doc.days = normalizeWeekDays(weekStartMonday, doc.days);
+
   const { days, filled, meta } = fillWeekDays(doc.days, { replace, fillEmptyOnly, pool });
   doc.days = days;
   await doc.save();
@@ -346,8 +418,8 @@ async function patchWeekSlot(userId, body) {
     return { ok: false, status: 400, message: 'slotData is required (use null to clear a slot)' };
   }
 
-  const slot = String(body?.slot || '').toLowerCase();
-  if (!SLOT_KEYS.includes(slot)) {
+  const slot = normalizeSlotName(body?.slot);
+  if (!slot) {
     return { ok: false, status: 400, message: 'slot must be breakfast, lunch, or dinner' };
   }
 
@@ -382,12 +454,59 @@ async function patchWeekSlot(userId, body) {
   return { ok: true, plan: doc.toObject() };
 }
 
+async function addSelectedRecipeToSlot(userId, body) {
+  if (body?.weekStart == null || body.weekStart === '') {
+    return { ok: false, status: 400, message: 'weekStart is required' };
+  }
+  if (body?.date == null || body.date === '') {
+    return { ok: false, status: 400, message: 'date is required' };
+  }
+  const slot = normalizeSlotName(body?.slot);
+  if (!slot) {
+    return { ok: false, status: 400, message: 'slot must be breakfast, lunch, or dinner' };
+  }
+
+  const recipe = body?.recipe;
+  if (!recipe || typeof recipe !== 'object' || Array.isArray(recipe)) {
+    return { ok: false, status: 400, message: 'recipe object is required' };
+  }
+
+  const requestedSource = String(recipe.source || '').trim().toLowerCase();
+  if (requestedSource !== 'mongo' && requestedSource !== 'mealdb') {
+    return { ok: false, status: 400, message: 'recipe.source must be mongo or mealdb' };
+  }
+
+  if (requestedSource === 'mongo' && !recipe.recipe_id && !recipe._id) {
+    return { ok: false, status: 400, message: 'recipe.recipe_id or recipe._id is required for mongo recipes' };
+  }
+  if (requestedSource === 'mealdb' && !recipe.idMeal && !recipe.recipeId) {
+    return { ok: false, status: 400, message: 'recipe.idMeal or recipe.recipeId is required for mealdb recipes' };
+  }
+
+  const slotData = buildSlotFromSelectedRecipe(recipe);
+  if (slotData.source === 'mongo' && !slotData.recipe_id) {
+    return { ok: false, status: 400, message: 'Unable to build mongo slot from recipe payload' };
+  }
+  if (slotData.source === 'mealdb' && !slotData.idMeal) {
+    return { ok: false, status: 400, message: 'Unable to build mealdb slot from recipe payload' };
+  }
+
+  return patchWeekSlot(userId, {
+    weekStart: body.weekStart,
+    date: body.date,
+    slot,
+    slotData,
+  });
+}
+
 module.exports = {
   SLOT_KEYS,
+  normalizeSlotName,
   startOfUtcWeekMonday,
   utcDateKey,
   getWeekPlan,
   listWeekPlans,
   generateWeekPlan,
   patchWeekSlot,
+  addSelectedRecipeToSlot,
 };

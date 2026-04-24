@@ -122,6 +122,74 @@ exports.addItemsToList = async (req, res) => {
     }
 };
 
+exports.addMissingIngredientsToList = async (req, res) => {
+    try {
+        const user_id = parseUserId(req);
+        if (!user_id) {
+            return res.status(401).json({ status: 'ERROR', message: 'Unauthorized' });
+        }
+
+        const listId = req.params.listId;
+        const {
+            sourceSurface,
+            recipeId,
+            recipeTitle,
+            mode,
+            ingredients,
+        } = req.body || {};
+
+        if (!['suggest', 'browse'].includes(sourceSurface)) {
+            return res.status(400).json({ status: 'ERROR', message: 'sourceSurface must be suggest or browse' });
+        }
+
+        if (!recipeId || !String(recipeId).trim()) {
+            return res.status(400).json({ status: 'ERROR', message: 'recipeId is required' });
+        }
+
+        if (!['single', 'all'].includes(mode)) {
+            return res.status(400).json({ status: 'ERROR', message: 'mode must be single or all' });
+        }
+
+        if (!Array.isArray(ingredients)) {
+            return res.status(400).json({ status: 'ERROR', message: 'ingredients array is required' });
+        }
+
+        if (mode === 'single' && ingredients.length !== 1) {
+            return res.status(400).json({ status: 'ERROR', message: 'single mode requires exactly one ingredient' });
+        }
+
+        if (mode === 'all' && ingredients.length < 1) {
+            return res.status(400).json({ status: 'ERROR', message: 'all mode requires at least one ingredient' });
+        }
+
+        const result = await groceryListService.addMissingIngredientsToList(user_id, listId, {
+            sourceSurface,
+            recipeId,
+            recipeTitle,
+            mode,
+            ingredients,
+        });
+        if (!result.ok) {
+            return res.status(result.status).json({ status: 'ERROR', message: result.message });
+        }
+
+        return res.status(200).json({
+            status: 'OK',
+            message: `${result.added_count} missing ingredient(s) added to list`,
+            data: {
+                list: result.list,
+                added_count: result.added_count,
+                recipe: result.recipe,
+                source_surface: result.source_surface,
+                mode: result.mode,
+            },
+        });
+    } catch (err) {
+        console.error('addMissingIngredientsToList error:', err);
+        return res.status(500).json({ status: 'ERROR', message: 'Failed to add missing ingredients to list' });
+    }
+};
+
 exports.updateItemPurchaseStatus = async (req, res) => {
     try {
         const user_id = parseUserId(req);
